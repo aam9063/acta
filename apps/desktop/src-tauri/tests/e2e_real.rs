@@ -303,7 +303,7 @@ async fn e2e_live_recording_with_system_tap() {
     let detail = r.core.meeting_get(id).await.unwrap();
     eprintln!("audio: {:?}", detail.audio);
     let sys = std::fs::read(r.layout.meeting_dir(id).join("audio/system.wav")).unwrap();
-    let nonzero = sys[44..].chunks_exact(2).filter(|c| c != &[0, 0]).count();
+    let nonzero = sys[44..].as_chunks::<2>().0.iter().filter(|c| **c != [0, 0]).count();
     eprintln!("system.wav: {} muestras, {nonzero} no nulas", (sys.len() - 44) / 2);
     assert!(nonzero > 1_000, "el tap del sistema no grabó el sonido");
     let said: Vec<String> = detail.transcript.utterances.iter().map(|u| u.text.to_lowercase()).collect();
@@ -317,7 +317,7 @@ async fn e2e_live_recording_with_system_tap() {
     // `session:health` solo se emite si hay algún aviso (micro a ceros con la
     // tapa cerrada o TCC denegado); con el micro sano la pista tiene señal.
     let mic = std::fs::read(r.layout.meeting_dir(id).join("audio/mic.wav")).unwrap();
-    let mic_nonzero = mic[44..].chunks_exact(2).filter(|c| c != &[0, 0]).count();
+    let mic_nonzero = mic[44..].as_chunks::<2>().0.iter().filter(|c| **c != [0, 0]).count();
     eprintln!("mic.wav: {} muestras, {mic_nonzero} no nulas", (mic.len() - 44) / 2);
     if health.is_empty() {
         assert!(mic_nonzero > 1_000, "micro sin avisos pero a ceros");

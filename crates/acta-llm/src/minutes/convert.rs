@@ -172,7 +172,7 @@ pub fn convert(ctx: &ConvertCtx, v: MinutesV1) -> MinutesOutput {
         .decisiones
         .into_iter()
         .filter(|d| !d.texto.trim().is_empty())
-        .map(|d| Decision { id: DecisionId::new(), text: d.texto.trim().to_owned(), at: d.ts_ms.map(&clamp_at) })
+        .map(|d| Decision { id: DecisionId::new(), text: d.texto.trim().to_owned(), at: d.ts_ms.map(clamp_at) })
         .collect();
     let action_items = v
         .tareas
