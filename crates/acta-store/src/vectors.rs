@@ -9,7 +9,7 @@ pub fn blob_to_vec(b: &[u8]) -> Option<Vec<f32>> {
     if !b.len().is_multiple_of(4) {
         return None;
     }
-    Some(b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+    Some(b.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect())
 }
 
 /// Similitud coseno. Devuelve 0 si las dimensiones difieren o algún vector es nulo.
