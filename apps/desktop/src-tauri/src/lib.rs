@@ -327,6 +327,14 @@ pub fn run() {
     };
     let stopping = AtomicBool::new(false);
     app.run(move |handle, event| {
+        #[cfg(target_os = "macos")]
+        if let RunEvent::Reopen { .. } = &event {
+            // El Dock debe recuperar la ventana principal aunque la pastilla
+            // siga visible (has_visible_windows no distingue entre ambas).
+            if let Err(e) = commands::show_main(handle, None) {
+                tracing::warn!("no se pudo reabrir la ventana principal: {e}");
+            }
+        }
         if let RunEvent::ExitRequested { .. } = event
             && !stopping.swap(true, Ordering::SeqCst)
             && let Some(core) = handle.try_state::<Core>()

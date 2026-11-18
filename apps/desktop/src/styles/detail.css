@@ -1,5 +1,9 @@
 /* Detalle de la reunión: cabecera, pestañas flotantes, reproductor y cada pestaña. */
 .detail-wrap { position: relative; height: 100%; }
+.modal.delete-meeting-dialog { width: min(440px, 100%); padding: 24px; }
+.delete-meeting-dialog h2 { margin: 0 0 12px; }
+.delete-meeting-dialog p { line-height: 1.6; overflow-wrap: anywhere; }
+.delete-meeting-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 .detail-head { padding-top: 34px; display: flex; flex-direction: column; gap: 16px; }
 .detail-bar { display: flex; align-items: center; gap: 8px; }
 .detail-hero { display: flex; align-items: center; gap: 16px; }

@@ -20,6 +20,7 @@ import { ProcessingStatus } from "./ProcessingStatus";
 import { RetryMenu } from "./RetryMenu";
 import { useProcessingTimeline } from "./useProcessingTimeline";
 import { useMeetingDetail } from "./useMeetingDetail";
+import { DeleteMeetingDialog } from "./DeleteMeetingDialog";
 
 const capitalizeFirst = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -82,6 +83,7 @@ function Body({ meetingId, initialSeekMs, onBack, onOpenMeeting, detail, voicepr
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const { seek } = player;
 
   useEffect(() => {
@@ -175,9 +177,7 @@ function Body({ meetingId, initialSeekMs, onBack, onOpenMeeting, detail, voicepr
             <IconButton
               label="Eliminar reunión"
               variant="glass"
-              onClick={() => {
-                if (window.confirm("¿Eliminar esta reunión y todo su contenido?")) void api.meetingDelete(meeting.id).then(onBack);
-              }}
+              onClick={() => setConfirmingDelete(true)}
             >
               <Trash2 size={15} strokeWidth={1.9} aria-hidden />
             </IconButton>
@@ -302,6 +302,9 @@ function Body({ meetingId, initialSeekMs, onBack, onOpenMeeting, detail, voicepr
       <div className="player-dock">
         <AudioPlayer activity={activity} durationMs={meeting.duration} />
       </div>
+      {confirmingDelete ? (
+        <DeleteMeetingDialog title={meeting.title} onClose={() => setConfirmingDelete(false)} onDelete={() => api.meetingDelete(meeting.id)} onDeleted={onBack} />
+      ) : null}
     </div>
   );
 }

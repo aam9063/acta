@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createMockApi } from "../../api";
@@ -89,11 +89,84 @@ describe("MeetingDetailContainer", () => {
   });
 
   it("elimina la reunión tras confirmar", async () => {
-    const onBack = vi.fn();
-    const { controls } = setup(() => {}, { onBack });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { api, controls, d, onBack } = setup();
+    const remove = vi.spyOn(api, "meetingDelete");
     await userEvent.click(await screen.findByRole("button", { name: "Eliminar reunión" }));
+    const dialog = screen.getByRole("dialog", { name: "Eliminar reunión" });
+    expect(within(dialog).getByText(/Daily del equipo/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Cancelar" })).toHaveFocus();
+    expect(remove).not.toHaveBeenCalled();
+    expect(onBack).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Eliminar reunión" }));
     await waitFor(() => expect(controls.state.meetings).toHaveLength(0));
-    expect(onBack).toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledExactlyOnceWith(d.meeting.id);
+    expect(onBack).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it.each(["cancelar", "Escape", "fondo"])("%s cierra la confirmación sin borrar y devuelve el foco", async (action) => {
+    const { api, controls, onBack } = setup();
+    const remove = vi.spyOn(api, "meetingDelete");
+    const trigger = await screen.findByRole("button", { name: "Eliminar reunión" });
+    await userEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "Eliminar reunión" });
+    if (action === "cancelar") await userEvent.click(within(dialog).getByRole("button", { name: "Cancelar" }));
+    else if (action === "Escape") await userEvent.keyboard("{Escape}");
+    else await userEvent.click(dialog.parentElement!);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(remove).not.toHaveBeenCalled();
+    expect(controls.state.meetings.length).toBeGreaterThan(0);
+    expect(onBack).not.toHaveBeenCalled();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("mantiene el foco dentro de la confirmación", async () => {
+    setup();
+    await userEvent.click(await screen.findByRole("button", { name: "Eliminar reunión" }));
+    const dialog = screen.getByRole("dialog");
+    const cancel = within(dialog).getByRole("button", { name: "Cancelar" });
+    const confirm = within(dialog).getByRole("button", { name: "Eliminar reunión" });
+    await userEvent.tab({ shift: true });
+    expect(confirm).toHaveFocus();
+    await userEvent.tab();
+    expect(cancel).toHaveFocus();
+    await userEvent.tab();
+    expect(confirm).toHaveFocus();
+    await userEvent.tab();
+    expect(cancel).toHaveFocus();
+  });
+
+  it("espera el borrado, evita envíos duplicados y no permite cerrar mientras está pendiente", async () => {
+    const { api, onBack } = setup();
+    let finish!: () => void;
+    const remove = vi.spyOn(api, "meetingDelete").mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    await userEvent.click(await screen.findByRole("button", { name: "Eliminar reunión" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.dblClick(within(dialog).getByRole("button", { name: "Eliminar reunión" }));
+    expect(remove).toHaveBeenCalledOnce();
+    expect(onBack).not.toHaveBeenCalled();
+    expect(within(dialog).getByRole("button", { name: "Eliminando…" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Cancelar" })).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(dialog.parentElement!);
+    expect(dialog).toBeInTheDocument();
+    finish();
+    await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("muestra el error de borrado y permite reintentar sin salir de la reunión", async () => {
+    const { api, controls, onBack } = setup();
+    const remove = vi.spyOn(api, "meetingDelete").mockRejectedValueOnce({ message: "No se pudo eliminar el audio." });
+    await userEvent.click(await screen.findByRole("button", { name: "Eliminar reunión" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Eliminar reunión" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("No se pudo eliminar el audio.");
+    expect(onBack).not.toHaveBeenCalled();
+    expect(controls.state.meetings.length).toBeGreaterThan(0);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Eliminar reunión" }));
+    await waitFor(() => expect(controls.state.meetings).toHaveLength(0));
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(onBack).toHaveBeenCalledOnce();
   });
 });
