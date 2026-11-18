@@ -61,10 +61,9 @@ fn parse_name(name: &str) -> Option<(u32, Kind)> {
         (n, Kind::Tmp)
     } else if let Some(n) = rest.strip_suffix(".wav") {
         (n, Kind::Wav)
-    } else if let Some(n) = rest.strip_suffix(".raw") {
-        (n, Kind::Raw)
     } else {
-        return None;
+        let n = rest.strip_suffix(".raw")?;
+        (n, Kind::Raw)
     };
     Some((num.parse().ok()?, kind))
 }
@@ -132,7 +131,7 @@ pub fn recover(layout: &DataLayout, meeting_id: MeetingId) -> PortResult<Session
                 continue;
             }
             let mut candidates = by_index.remove(&idx).unwrap_or_default();
-            candidates.sort_by(|a, b| b.0.cmp(&a.0)); // Wav > Raw > Tmp
+            candidates.sort_by_key(|a| std::cmp::Reverse(a.0)); // Wav > Raw > Tmp
             for (kind, name) in candidates {
                 let path = dir.join(&name);
                 let rel = format!("audio/{}/seg-{idx:06}", track.as_str());
