@@ -127,6 +127,7 @@ impl AppCore {
             detector: deps.native.detector.clone(),
             speakers: deps.native.speakers.clone(),
             screen: deps.native.screen.clone(),
+            clipboard: deps.native.clipboard.clone(),
             live: deps.native.live.clone(),
             live_asr: Some(deps.native.transcriber.clone()),
             live_sessions: live_sessions.clone(),
@@ -726,57 +727,52 @@ impl AppCore {
             };
             let mut content = String::new();
             let mut citations = Vec::new();
+            // El delta final (`done`) NO sale hasta que la respuesta está guardada:
+            // la interfaz, al recibirlo, suelta el texto en streaming y relee los
+            // mensajes guardados. Si saliera antes, una respuesta larga (con muchas
+            // citas que anotar) desaparecería hasta que terminara de guardarse.
             let stream = tokio::select! {
                 r = engine.ask(&thread, &history, &text, assistant_message_id) => Some(r),
                 _ = &mut cancel_rx => None,
             };
-            let mut cancelled = stream.is_none();
-            match stream {
-                None => emitter.emit(event_names::CHAT_DELTA, to_json(&finish(None))),
-                Some(Err(e)) => emitter.emit(event_names::CHAT_DELTA, to_json(&finish(Some(e.to_string())))),
+            let last: ChatDelta = match stream {
+                None => finish(None),
+                Some(Err(e)) => finish(Some(e.to_string())),
                 Some(Ok(mut stream)) => loop {
                     let next = tokio::select! {
                         d = stream.next() => d,
-                        _ = &mut cancel_rx => { cancelled = true; None }
+                        _ = &mut cancel_rx => break finish(None),
                     };
-                    let Some(delta) = next else {
-                        if cancelled {
-                            emitter.emit(event_names::CHAT_DELTA, to_json(&finish(None)));
-                        }
-                        break;
-                    };
+                    let Some(delta) = next else { break finish(None) };
                     content.push_str(&delta.delta);
-                    let done = delta.done;
-                    if done {
+                    if delta.done {
                         citations = delta.citations.clone();
+                        break delta;
                     }
                     emitter.emit(event_names::CHAT_DELTA, to_json(&delta));
-                    if done {
-                        break;
-                    }
                 },
-            }
-            cancels.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
-            if content.trim().is_empty() {
-                return;
-            }
-            // Las reuniones citadas en la respuesta cuentan como usadas.
-            let now = clock.now();
-            for c in &citations {
-                let _ = store.touch_meeting(c.meeting_id, MeetingTouch::Used, now).await;
-            }
-            let msg = ChatMessage {
-                id: assistant_message_id,
-                thread_id,
-                role: ChatRole::Assistant,
-                content,
-                citations,
-                provider: Some(cfg.id),
-                created_at: clock.now(),
             };
-            if let Err(e) = store.append_message(msg).await {
-                tracing::warn!("no se pudo guardar la respuesta del chat: {e}");
+            cancels.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
+            if !content.trim().is_empty() {
+                // Las reuniones citadas en la respuesta cuentan como usadas.
+                let now = clock.now();
+                for c in &citations {
+                    let _ = store.touch_meeting(c.meeting_id, MeetingTouch::Used, now).await;
+                }
+                let msg = ChatMessage {
+                    id: assistant_message_id,
+                    thread_id,
+                    role: ChatRole::Assistant,
+                    content,
+                    citations,
+                    provider: Some(cfg.id),
+                    created_at: clock.now(),
+                };
+                if let Err(e) = store.append_message(msg).await {
+                    tracing::warn!("no se pudo guardar la respuesta del chat: {e}");
+                }
             }
+            emitter.emit(event_names::CHAT_DELTA, to_json(&last));
         });
         Ok(ChatSendResult { user_message, assistant_message_id })
     }
@@ -1148,14 +1144,28 @@ impl AppCore {
 
     pub async fn permissions_status(&self) -> PortResult<Vec<PermissionState>> {
         let app = crate::system::app_level_permissions();
-        match self.native.permissions.status().await {
-            Ok(states) => Ok(crate::system::merge_app_level(states, app)),
+        let states = match self.native.permissions.status().await {
+            Ok(states) => crate::system::merge_app_level(states, app),
             Err(e) if self.native.error.is_some() => {
                 tracing::debug!("permisos sin sidecar: {e}");
-                Ok(crate::system::merge_app_level(vec![], app))
+                crate::system::merge_app_level(vec![], app)
             }
-            Err(e) => Err(e),
-        }
+            Err(e) => return Err(e),
+        };
+        // Si la captura de esta grabación acaba de chocar con TCC, eso manda.
+        let denied: Vec<PermissionKind> = self
+            .supervisor
+            .health()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|w| !w.cleared)
+            .filter_map(|w| match w.issue {
+                acta_core::recording::HealthIssue::PermissionMissing { permission } => Some(permission),
+                _ => None,
+            })
+            .collect();
+        Ok(crate::system::apply_runtime_denials(states, &denied))
     }
     pub async fn permissions_request(&self, kind: PermissionKind) -> PortResult<PermissionStatus> {
         self.native.permissions.request(kind).await

@@ -16,6 +16,7 @@ import { TimelineTab } from "../timeline/TimelineTab";
 import { TranscriptTab } from "../transcript/TranscriptTab";
 import { providerById, providerDisplay, providerModel } from "../chat/providerLabel";
 import { LiveLines } from "../live/LiveLines";
+import { MeetingFilesMenu } from "./MeetingFilesMenu";
 import { ProcessingStatus } from "./ProcessingStatus";
 import { RetryMenu } from "./RetryMenu";
 import { useProcessingTimeline } from "./useProcessingTimeline";
@@ -84,6 +85,7 @@ function Body({ meetingId, initialSeekMs, onBack, onOpenMeeting, detail, voicepr
   const [title, setTitle] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const { seek } = player;
 
   useEffect(() => {
@@ -173,6 +175,15 @@ function Body({ meetingId, initialSeekMs, onBack, onOpenMeeting, detail, voicepr
                 })
               }
             />
+            <MeetingFilesMenu
+              meetingId={meeting.id}
+              hasTranscript={detail.transcript.utterances.length > 0}
+              hasAudio={!!detail.audio.mix}
+              onResult={(r) => {
+                setActionError("error" in r ? r.error : null);
+                setNotice("ok" in r && r.ok ? r.ok : null);
+              }}
+            />
             <StarButton className="star-glass" on={meeting.favourite} name={meeting.title} size={17} onToggle={(f) => void run(() => api.meetingSetFavourite(meeting.id, f))} />
             <IconButton
               label="Eliminar reunión"
@@ -251,6 +262,7 @@ function Body({ meetingId, initialSeekMs, onBack, onOpenMeeting, detail, voicepr
             onRetry={(llm) => retry(hasTranscript ? RESUME_STEPS : null, llm)}
           />
           {actionError ? <p role="alert" className="inline-error">{actionError}</p> : null}
+          {notice ? <p role="status" className="muted">{notice}</p> : null}
         </header>
         <div className="sticky-bar sticky-bar-center">
           <div className="tabs-capsule glass">

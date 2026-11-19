@@ -1,9 +1,9 @@
 import type { AppInfo } from "../../api";
 import { ActaMark } from "../../shared/brand/ActaMark";
-import { Disclosure } from "../../shared/ui/ui";
+import { Button, Disclosure } from "../../shared/ui/ui";
 import { Field, Group, Row, Section } from "./fields";
 
-export function AboutSection({ info }: { info: AppInfo | null }) {
+export function AboutSection({ info, onOpenDataFolder }: { info: AppInfo | null; onOpenDataFolder?: () => void }) {
   return (
     <Section title="Acerca de">
       <div className="about-hero card">
@@ -16,6 +16,11 @@ export function AboutSection({ info }: { info: AppInfo | null }) {
       <Group>
         <Row label="Versión">
           <span className="muted num selectable">{info?.version ?? "No disponible"}</span>
+        </Row>
+        <Row label="Carpeta de reuniones" hint="Audio, transcripciones y capturas de todas las reuniones.">
+          <Button small onClick={onOpenDataFolder} disabled={!onOpenDataFolder}>
+            Abrir carpeta de datos
+          </Button>
         </Row>
         <Row label="macOS">
           <span className="muted num selectable">{info?.macosVersion ?? "Desconocido"}</span>

@@ -29,6 +29,15 @@ function MiniMeter({ label, level }: { label: string; level: number }) {
   );
 }
 
+function StartButton({ onStart }: { onStart(): void }) {
+  return (
+    <button type="button" className="rec-button" onClick={onStart}>
+      <span className="rec-button-dot" aria-hidden />
+      Grabar ahora
+    </button>
+  );
+}
+
 /** Control de grabación de la barra lateral: refleja la sesión en vivo. */
 function RecordControl() {
   const api = useApi();
@@ -81,8 +90,22 @@ function RecordControl() {
     );
   }
 
-  if (state.state === "stopping" || state.state === "processing" || state.state === "recovering") {
-    const label = state.state === "stopping" ? "Guardando el audio" : state.state === "recovering" ? "Recuperando grabación" : STEP_LABEL[state.step];
+  // Procesar una reunión no bloquea grabar otra (igual que en la bandeja):
+  // el proceso sigue en segundo plano y el botón se mantiene debajo.
+  if (state.state === "processing") {
+    return (
+      <>
+        <div className="rec-card glass rec-card-busy" role="status">
+          <Spinner />
+          <span>{STEP_LABEL[state.step]}…</span>
+        </div>
+        <StartButton onStart={() => void api.sessionStart(null).then(setSnap)} />
+      </>
+    );
+  }
+
+  if (state.state === "stopping" || state.state === "recovering") {
+    const label = state.state === "stopping" ? "Guardando el audio" : "Recuperando grabación";
     return (
       <div className="rec-card glass rec-card-busy" role="status">
         <Spinner />
@@ -91,12 +114,7 @@ function RecordControl() {
     );
   }
 
-  return (
-    <button type="button" className="rec-button" onClick={() => void api.sessionStart(null).then(setSnap)}>
-      <span className="rec-button-dot" aria-hidden />
-      Grabar ahora
-    </button>
-  );
+  return <StartButton onStart={() => void api.sessionStart(null).then(setSnap)} />;
 }
 
 interface SidebarProps {
@@ -108,6 +126,11 @@ interface SidebarProps {
 }
 
 export function Sidebar({ view, onView, onSearch, live }: SidebarProps) {
+  const api = useApi();
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    api.appInfo().then((i) => setVersion(i.version), () => setVersion(null));
+  }, [api]);
   return (
     <aside className="sidebar">
       <div className="side-brand" aria-hidden>
@@ -138,6 +161,7 @@ export function Sidebar({ view, onView, onSearch, live }: SidebarProps) {
         ))}
       </nav>
       <RecordControl />
+      {version ? <p className="side-version num muted selectable">v{version}</p> : null}
     </aside>
   );
 }

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createMockApi } from "../api";
@@ -45,6 +45,18 @@ describe("App", () => {
     expect(spy).toHaveBeenCalled();
     expect(await screen.findByText(/Grabando/)).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("button", { name: "Grabar ahora" })).not.toBeInTheDocument());
+  });
+
+  it("permite grabar de nuevo mientras una reunión se procesa en segundo plano", async () => {
+    const { api, controls } = setup();
+    const spy = vi.spyOn(api, "sessionStart");
+    await screen.findByRole("button", { name: "Grabar ahora" });
+    controls.state.snapshot = { ...controls.state.snapshot, state: { state: "processing", meetingId: "m-old", step: "transcribing" } };
+    act(() => controls.emit("session:state", controls.state.snapshot));
+    expect(await screen.findByText(/Transcribiendo/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Grabar ahora" }));
+    expect(spy).toHaveBeenCalled();
+    expect(await screen.findByText(/Grabando/)).toBeInTheDocument();
   });
 
   it("una cita de otra pantalla abre la reunión", async () => {

@@ -94,6 +94,10 @@ export function createTauriApi(): ActaApi {
     systemProfile: () => invoke(C.systemProfile),
     appsList: () => invoke(C.appsList),
     openExternalUrl: (url) => invoke(C.openExternalUrl, { url }),
+    meetingExportTranscript: (meetingId, format) => invoke(C.meetingExportTranscript, { id: meetingId, format }),
+    meetingExportAudio: (meetingId) => invoke(C.meetingExportAudio, { id: meetingId }),
+    openMeetingFolder: (meetingId) => invoke(C.openMeetingFolder, { id: meetingId }),
+    openDataFolder: () => invoke(C.openDataFolder),
 
     overlaySetExpanded: (expanded) => invoke(C.overlaySetExpanded, { expanded }),
     mainWindowShow: (meetingId) => invoke(C.mainWindowShow, { meetingId: meetingId ?? null }),

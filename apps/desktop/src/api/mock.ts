@@ -30,6 +30,9 @@ export interface MockState {
   remoteModels: Record<string, string[]>;
   /** Enlaces que se han pedido abrir en el navegador. */
   opened: string[];
+  /** Descargas pedidas (transcripción / audio) y carpetas abiertas (`data`, `meeting:<id>`). */
+  exports: ({ kind: "transcript"; meetingId: string; format: string } | { kind: "audio"; meetingId: string })[];
+  folders: string[];
   /** Modelo local integrado: lo que «hay» en este Mac. */
   localLlm: T.LocalLlmStatus;
   /** Reuniones que la limpieza sugeriría borrar. */
@@ -365,6 +368,8 @@ export function createMockApi(seed: Partial<MockState> = {}): { api: ActaApi; co
     local: noLocalRuntimes(),
     remoteModels: {},
     opened: [],
+    exports: [],
+    folders: [],
     localLlm: mockLocalLlmStatus(),
     cleanup: [],
     kept: [],
@@ -843,6 +848,20 @@ export function createMockApi(seed: Partial<MockState> = {}): { api: ActaApi; co
 
     async openExternalUrl(url) {
       state.opened.push(url);
+    },
+    async meetingExportTranscript(meetingId, format) {
+      state.exports.push({ kind: "transcript", meetingId, format });
+      return { path: `/tmp/Descargas/transcripcion.${format}` };
+    },
+    async meetingExportAudio(meetingId) {
+      state.exports.push({ kind: "audio", meetingId });
+      return { path: "/tmp/Descargas/audio.wav" };
+    },
+    async openMeetingFolder(meetingId) {
+      state.folders.push(`meeting:${meetingId}`);
+    },
+    async openDataFolder() {
+      state.folders.push("data");
     },
 
     async overlaySetExpanded() {},

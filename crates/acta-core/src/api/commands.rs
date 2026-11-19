@@ -125,6 +125,10 @@ pub mod command_names {
     pub const LLM_LIST_MODELS: &str = "llm_list_models";
     pub const LLM_DETECT_LOCAL: &str = "llm_detect_local";
     pub const OPEN_EXTERNAL_URL: &str = "open_external_url";
+    pub const MEETING_EXPORT_TRANSCRIPT: &str = "meeting_export_transcript";
+    pub const MEETING_EXPORT_AUDIO: &str = "meeting_export_audio";
+    pub const OPEN_MEETING_FOLDER: &str = "open_meeting_folder";
+    pub const OPEN_DATA_FOLDER: &str = "open_data_folder";
     pub const LOCAL_LLM_STATUS: &str = "local_llm_status";
     pub const LOCAL_LLM_DOWNLOAD: &str = "local_llm_download";
     pub const LOCAL_LLM_CANCEL: &str = "local_llm_cancel";

@@ -257,7 +257,8 @@ export interface GroupTitleSuggestion {
 
 // ---------------------------------------------------------------- transcript
 
-export type NameSource = "me" | "user" | "appUi" | "voiceprint" | "generic";
+/** `transcript` = deducido de lo dicho en la reunión ("Hola, soy Marta"). */
+export type NameSource = "me" | "user" | "appUi" | "voiceprint" | "transcript" | "generic";
 
 export interface Speaker {
   id: SpeakerId;
@@ -828,6 +829,13 @@ export interface Settings {
     /** «Recordármelo más tarde»: el aviso no vuelve hasta esta fecha. */
     snoozedUntil: UnixMs | null;
   };
+}
+
+export type TranscriptFormat = "txt" | "md";
+
+/** Fichero que se acaba de guardar en Descargas (ruta absoluta). */
+export interface ExportedFile {
+  path: string;
 }
 
 export interface AppInfo {

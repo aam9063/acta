@@ -18,6 +18,7 @@
 pub mod app;
 mod commands;
 pub mod events;
+pub mod export;
 pub mod glass;
 pub mod llm;
 pub mod native;
@@ -316,6 +317,10 @@ pub fn run() {
             commands::providers_ui::llm_list_models,
             commands::providers_ui::llm_detect_local,
             commands::providers_ui::open_external_url,
+            commands::downloads::meeting_export_transcript,
+            commands::downloads::meeting_export_audio,
+            commands::downloads::open_meeting_folder,
+            commands::downloads::open_data_folder,
         ])
         .build(tauri::generate_context!());
     let app = match app {

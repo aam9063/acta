@@ -59,6 +59,11 @@ export const COMMANDS = {
   llmListModels: "llm_list_models",
   llmDetectLocal: "llm_detect_local",
   openExternalUrl: "open_external_url",
+  // src-tauri/src/commands/downloads.rs
+  meetingExportTranscript: "meeting_export_transcript",
+  meetingExportAudio: "meeting_export_audio",
+  openMeetingFolder: "open_meeting_folder",
+  openDataFolder: "open_data_folder",
   meetingSetFavourite: "meeting_set_favourite",
   groupSetFavourite: "group_set_favourite",
   cleanupSuggestions: "cleanup_suggestions",
@@ -236,6 +241,14 @@ export interface ActaApi {
   appsList(): Promise<T.InstalledApp[]>;
   /** Abre un enlace web en el navegador por defecto (nunca dentro de acta). */
   openExternalUrl(url: string): Promise<void>;
+  /** Guarda la transcripción (nombres y tiempos) en Descargas y la muestra en el Finder. */
+  meetingExportTranscript(meetingId: T.MeetingId, format: T.TranscriptFormat): Promise<T.ExportedFile>;
+  /** Copia el audio final (la mezcla) de la reunión a Descargas y lo muestra en el Finder. */
+  meetingExportAudio(meetingId: T.MeetingId): Promise<T.ExportedFile>;
+  /** Abre en el Finder la carpeta de la reunión (audio, capturas, transcript). */
+  openMeetingFolder(meetingId: T.MeetingId): Promise<void>;
+  /** Abre en el Finder la carpeta de datos de acta (`AppInfo.dataDir`). */
+  openDataFolder(): Promise<void>;
 
   // ventanas
   overlaySetExpanded(expanded: boolean): Promise<void>;

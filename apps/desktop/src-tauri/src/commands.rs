@@ -19,6 +19,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
+pub mod downloads;
 pub mod providers_ui;
 
 pub type Core = Arc<AppCore>;

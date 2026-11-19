@@ -244,7 +244,7 @@ export function SettingsContainer({ onReplayOnboarding }: { onReplayOnboarding?:
               onRefresh={refreshPermissions}
             />
           ) : null}
-          {section === "about" ? <AboutSection info={info} /> : null}
+          {section === "about" ? <AboutSection info={info} onOpenDataFolder={() => api.openDataFolder().catch((e: unknown) => setMessage(errorMessage(e)))} /> : null}
         </div>
       </div>
       {dirty || message ? (

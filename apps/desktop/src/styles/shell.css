@@ -100,3 +100,5 @@ html:not([data-native]) body {
 .palette-item[aria-selected="true"] .palette-detail, .palette-item[aria-selected="true"] .palette-icon { color: rgba(255, 255, 255, 0.82); }
 .palette-item[aria-selected="true"] .palette-enter { opacity: 0.9; }
 .palette-empty { padding: 28px; text-align: center; color: var(--fg-2); }
+
+.side-version { margin: 6px 0 0; text-align: center; font-size: var(--t-caption, 11px); opacity: 0.7; }
