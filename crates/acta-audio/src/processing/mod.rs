@@ -9,7 +9,7 @@
 //! | `concatenating` | segmentos + manifiesto, `live/screen.jsonl` | `audio/{mic,system,mix}.wav`, duración, tramos de pantalla |
 //! | `transcribing` | `audio/<track>.wav` | `transcript/segments-<track>.json` |
 //! | `diarizing` | `audio/system.wav` | `transcript/diarization-result.json` |
-//! | `namingSpeakers` | cachés anteriores + `live/speakers.jsonl` + huellas | transcript en el store |
+//! | `namingSpeakers` | cachés anteriores + `live/speakers.jsonl` + huellas + LLM (nombres dichos en la reunión) | transcript en el store |
 //! | `summarizing` | transcript + capturas | acta en el store + `llm/minutes.json` |
 //! | `indexing` | transcript | chunks, FTS, vectores |
 //! | `pruningCaptures` | `llm/minutes.json` | candidatas promovidas a `llmPick` o borradas |
@@ -34,7 +34,10 @@ use acta_core::recording::{SessionManifest, Track};
 use acta_core::screen::{CaptureReason, ScreenEvent, ScreenShare};
 use acta_core::settings::Settings;
 use acta_core::time::MediaMs;
-use acta_core::transcription::{AsrSegment, DiarizationResult, DiarizeOptions, Diarizer, TranscribeRequest, Transcriber};
+use acta_core::transcription::{
+    AsrSegment, DiarizationResult, DiarizeOptions, Diarizer, NameSource, SpeakerNamer, SpeakerNamingInput, TranscribeRequest,
+    Transcriber, Transcript,
+};
 use acta_core::{PortError, PortResult};
 use async_trait::async_trait;
 use merge::{ActiveSpan, MergeInput, merge_transcript};
@@ -51,6 +54,9 @@ pub struct DefaultPipeline {
     pub transcriber: Arc<dyn Transcriber>,
     pub diarizer: Arc<dyn Diarizer>,
     pub minutes: Arc<dyn MinutesGenerator>,
+    /// Nombres deducidos de la conversación para los "Speaker N" (LLM).
+    /// `None` = sin proveedor: se quedan genéricos.
+    pub speaker_namer: Option<Arc<dyn SpeakerNamer>>,
 }
 
 /// Duración media del manifiesto (la pista más larga).
@@ -257,6 +263,21 @@ impl DefaultPipeline {
         let active = read_manifest(&self.layout, id)
             .map(|m| active_spans(&signals, &m))
             .unwrap_or_default();
+        let participants: Vec<String> = signals
+            .iter()
+            .filter_map(|s| match s {
+                SpeakerSignal::Roster { participants, .. } => Some(participants),
+                SpeakerSignal::Active { .. } => None,
+            })
+            .flatten()
+            .filter(|p| !p.is_self && !p.name.trim().is_empty())
+            .map(|p| p.name.trim().to_owned())
+            .fold(Vec::new(), |mut acc, n| {
+                if !acc.contains(&n) {
+                    acc.push(n);
+                }
+                acc
+            });
         let mut self_names: Vec<String> = signals
             .iter()
             .filter_map(|s| match s {
@@ -286,19 +307,75 @@ impl DefaultPipeline {
             }
         }
         let previous = self.store.get_transcript(id).await?;
-        let transcript = merge_transcript(
+        let mut transcript = merge_transcript(
             id,
             MergeInput {
                 mic,
                 system,
                 diarization,
                 active,
-                self_names,
+                self_names: self_names.clone(),
                 voiceprints,
                 previous,
             },
         );
+        self.names_from_conversation(&mut transcript, self_names, participants).await;
         self.store.save_transcript(transcript).await
+    }
+
+    /// Último recurso para los "Speaker N": el nombre que se dice en la
+    /// reunión. Nunca hace fallar el paso (se quedan genéricos) ni pisa un
+    /// nombre que ya tenga otro hablante.
+    async fn names_from_conversation(&self, transcript: &mut Transcript, self_names: Vec<String>, participants: Vec<String>) {
+        let Some(namer) = &self.speaker_namer else { return };
+        let targets: Vec<_> = transcript
+            .speakers
+            .iter()
+            .filter(|s| !s.is_me && !s.confirmed && s.name_source == NameSource::Generic)
+            .map(|s| s.id)
+            .collect();
+        if targets.is_empty() || transcript.utterances.is_empty() {
+            return;
+        }
+        let title = match self.store.get_meeting(transcript.meeting_id).await {
+            Ok(Some(m)) => m.title,
+            _ => String::new(),
+        };
+        let input = SpeakerNamingInput {
+            title,
+            me_name: self.settings.user.display_name.clone(),
+            self_names: self_names.clone(),
+            participants,
+            speakers: transcript.speakers.clone(),
+            utterances: transcript.utterances.clone(),
+            targets: targets.clone(),
+        };
+        let guesses = match namer.name_speakers(input).await {
+            Ok(g) => g,
+            Err(e) => {
+                tracing::warn!(meeting_id = %transcript.meeting_id, "no se pudieron deducir nombres de la conversación: {e}");
+                return;
+            }
+        };
+        let norm = |s: &str| s.trim().to_lowercase();
+        for g in guesses {
+            let name = g.name.trim().to_owned();
+            if name.is_empty() || !targets.contains(&g.speaker_id) || self_names.iter().any(|n| norm(n) == norm(&name)) {
+                continue;
+            }
+            let taken = transcript
+                .speakers
+                .iter()
+                .any(|s| s.id != g.speaker_id && s.display_name.as_deref().is_some_and(|d| norm(d) == norm(&name)));
+            if taken {
+                continue;
+            }
+            if let Some(s) = transcript.speakers.iter_mut().find(|s| s.id == g.speaker_id && s.name_source == NameSource::Generic) {
+                tracing::info!(meeting_id = %transcript.meeting_id, label = %s.label, evidence = %g.evidence, "nombre deducido de la conversación");
+                s.display_name = Some(name);
+                s.name_source = NameSource::Transcript;
+            }
+        }
     }
 
     async fn summarize(&self, id: MeetingId) -> PortResult<bool> {

@@ -5,7 +5,8 @@
 //!   solape (o al más cercano si no solapa ninguno).
 //! - Nombre de cada hablante diarizado, por orden: nombre confirmado antes
 //!   por el usuario (reprocesado) > huella de voz > hablante activo de Teams
-//!   con mayor solape > "Speaker N".
+//!   con mayor solape > "Speaker N" (luego `DefaultPipeline` pide al
+//!   `SpeakerNamer` el nombre que se dice en la reunión para los genéricos).
 //! - Eco: segmentos `system` que solapan ≥ 80 % con uno `mic` de texto casi
 //!   igual se descartan (la voz del usuario saliendo por los altavoces).
 

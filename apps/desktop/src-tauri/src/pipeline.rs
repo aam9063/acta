@@ -16,7 +16,9 @@ use acta_core::settings::Settings;
 use acta_core::time::Clock;
 use acta_core::transcription::{Diarizer, Transcriber};
 use acta_core::{PortError, PortResult};
+use acta_core::transcription::SpeakerNamer;
 use acta_llm::minutes::LlmMinutesGenerator;
+use acta_llm::naming::speakers::LlmSpeakerNamer;
 use async_trait::async_trait;
 use std::sync::{Arc, RwLock};
 
@@ -111,6 +113,13 @@ impl DynamicPipeline {
             Err(e) => Arc::new(NoMinutes(e.to_string())),
         }
     }
+
+    /// Mismo proveedor que el acta. Sin proveedor, los "Speaker N" se quedan
+    /// así (el paso no falla).
+    fn speaker_namer(&self, settings: &Settings) -> Option<Arc<dyn SpeakerNamer>> {
+        let (_, provider) = build_provider(settings, self.factory.as_ref(), settings.llm.minutes_provider.as_ref()).ok()?;
+        Some(Arc::new(LlmSpeakerNamer::new(provider)))
+    }
 }
 
 #[async_trait]
@@ -125,6 +134,7 @@ impl ProcessingPipeline for DynamicPipeline {
         let pipeline = DefaultPipeline {
             layout: self.layout.clone(),
             minutes: self.minutes(&settings, &failed),
+            speaker_namer: self.speaker_namer(&settings),
             settings,
             store: self.store.clone(),
             voiceprints: self.voiceprints.clone(),

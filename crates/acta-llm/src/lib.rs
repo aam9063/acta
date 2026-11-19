@@ -8,7 +8,8 @@
 //!   y troceo map-reduce si no cabe en contexto.
 //! - `minutes`: impl de `MinutesGenerator` (esquema `schemas/minutes.v1.json`).
 //! - `chat`: impl de `ChatEngine` (reunión = transcript completo; grupo/todo = RAG con citas `[n]`).
-//! - `naming`: impl de `GroupNamer` (esquema `schemas/group_name.v1.json`).
+//! - `naming`: impl de `GroupNamer` (esquema `schemas/group_name.v1.json`) y
+//!   `naming::speakers`: impl de `SpeakerNamer` (esquema `schemas/speaker_names.v1.json`).
 //! - `live`: preguntas sobre la reunión EN CURSO (`live_ask`), con citas `[mm:ss]`.
 //! - `moments`: impl de `ImportantMomentDetector` (palabras clave ES/EN).
 #![deny(clippy::zombie_processes)]
@@ -30,6 +31,7 @@ pub mod transcript;
 pub mod schemas {
     pub const MINUTES_V1: &str = include_str!("../schemas/minutes.v1.json");
     pub const GROUP_NAME_V1: &str = include_str!("../schemas/group_name.v1.json");
+    pub const SPEAKER_NAMES_V1: &str = include_str!("../schemas/speaker_names.v1.json");
 }
 
 /// Plantillas de prompt embebidas (`{{variable}}`).
@@ -39,6 +41,7 @@ pub mod prompts {
     pub const CHAT_SYSTEM: &str = include_str!("../prompts/chat.system.md");
     pub const GROUP_NAME_SYSTEM: &str = include_str!("../prompts/group_name.system.md");
     pub const LIVE_ASK_SYSTEM: &str = include_str!("../prompts/live_ask.system.md");
+    pub const SPEAKER_NAMES_SYSTEM: &str = include_str!("../prompts/speaker_names.system.md");
 }
 
 #[cfg(test)]
@@ -47,7 +50,7 @@ mod tests {
     /// los esquemas embebidos NO llevan `$schema` (bug real del 16-nov-2026).
     #[test]
     fn shipped_schemas_have_no_meta_schema_keyword() {
-        for raw in [super::schemas::MINUTES_V1, super::schemas::GROUP_NAME_V1] {
+        for raw in [super::schemas::MINUTES_V1, super::schemas::GROUP_NAME_V1, super::schemas::SPEAKER_NAMES_V1] {
             let v: serde_json::Value = serde_json::from_str(raw).expect("json");
             assert!(!crate::providers::common::contains_key(&v, "$schema"), "{raw}");
         }

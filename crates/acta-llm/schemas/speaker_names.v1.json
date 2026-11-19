@@ -1,0 +1,22 @@
+{
+  "title": "acta.speaker_names.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["hablantes"],
+  "properties": {
+    "hablantes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["etiqueta", "nombre", "confianza", "evidencia"],
+        "properties": {
+          "etiqueta": { "type": "string", "description": "Etiqueta tal cual: \"Speaker 2\"." },
+          "nombre": { "type": ["string", "null"], "description": "Nombre que se oye en la reunión, o null." },
+          "confianza": { "type": "string", "enum": ["alta", "media", "baja"] },
+          "evidencia": { "type": "string", "description": "Cita literal breve que lo justifica." }
+        }
+      }
+    }
+  }
+}

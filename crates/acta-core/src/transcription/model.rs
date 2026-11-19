@@ -80,6 +80,8 @@ pub enum NameSource {
     AppUi,
     /// Huella de voz guardada.
     Voiceprint,
+    /// Deducido de lo dicho en la reunión ("Hola, soy Marta", "gracias, Marta").
+    Transcript,
     /// Sin nombre: "Speaker N".
     Generic,
 }
@@ -164,4 +166,30 @@ pub struct LivePartial {
     pub text: String,
     pub at: UnixMs,
     pub is_final: bool,
+}
+
+/// Lo que recibe un `SpeakerNamer`: el transcript ya fusionado y las pistas
+/// de quién es quién. Solo se piden nombres para `targets` (los "Speaker N").
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeakerNamingInput {
+    pub title: String,
+    /// Nombre del usuario en Ajustes (sus líneas salen como "Ana (yo)").
+    pub me_name: String,
+    /// Nombres que son el usuario (Ajustes + alias + roster `is_self`): nunca
+    /// se le ponen a otro hablante.
+    pub self_names: Vec<String>,
+    /// Nombres conocidos de la reunión (roster de la app), como pista.
+    pub participants: Vec<String>,
+    pub speakers: Vec<Speaker>,
+    pub utterances: Vec<Utterance>,
+    /// Hablantes sin nombre a los que buscarle uno.
+    pub targets: Vec<SpeakerId>,
+}
+
+/// Nombre propuesto para un hablante (sin confirmar) y por qué.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpeakerNameGuess {
+    pub speaker_id: SpeakerId,
+    pub name: String,
+    pub evidence: String,
 }

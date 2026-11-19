@@ -1,4 +1,7 @@
 //! `GroupNamer` (WP3) con el esquema `acta.group_name.v1`.
+//! `speakers`: `SpeakerNamer` con el esquema `acta.speaker_names.v1`.
+
+pub mod speakers;
 
 use crate::structured::complete_structured;
 use crate::transcript::render_template;

@@ -37,3 +37,11 @@ pub trait LiveTranscriber: Send + Sync {
     async fn start(&self, tracks: &[Track], language: Option<String>) -> PortResult<EventStream<LivePartial>>;
     async fn stop(&self) -> PortResult<()>;
 }
+
+/// Propone nombres para los hablantes genéricos a partir de lo dicho en la
+/// reunión (presentaciones, vocativos). Impl: acta-llm. Solo devuelve
+/// nombres con evidencia; los dudosos se omiten.
+#[async_trait]
+pub trait SpeakerNamer: Send + Sync {
+    async fn name_speakers(&self, input: SpeakerNamingInput) -> PortResult<Vec<SpeakerNameGuess>>;
+}

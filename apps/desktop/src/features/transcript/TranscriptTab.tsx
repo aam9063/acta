@@ -70,7 +70,7 @@ export function TranscriptTab({ transcript, voiceprintNames, currentMs, onSeek, 
       </div>
       <ul className="speakers" aria-label="Hablantes">
         {transcript.speakers.map((s, i) => {
-          const suggested = !s.isMe && !s.confirmed && (s.nameSource === "voiceprint" || s.nameSource === "appUi") && s.displayName;
+          const suggested = !s.isMe && !s.confirmed && (s.nameSource === "voiceprint" || s.nameSource === "appUi" || s.nameSource === "transcript") && s.displayName;
           return (
             <li key={s.id} className={`speaker-chip${editing === s.id ? " speaker-chip-editing" : ""}`}>
               <Avatar name={nameOf(s)} color={speakerColor(i)} size="sm" />

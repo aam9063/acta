@@ -143,6 +143,7 @@ async fn world() -> World {
         transcriber: Arc::new(FakeAsr),
         diarizer: Arc::new(FakeDiar),
         minutes: minutes.clone(),
+        speaker_namer: None,
     };
     World { _dir: dir, layout, store, minutes, pipeline, id }
 }
@@ -398,4 +399,78 @@ async fn the_meeting_language_setting_drives_the_asr_hint_and_the_minutes_langua
         assert!(!seen.is_empty() && seen.iter().all(|l| l.as_deref() == hint), "{setting}: {seen:?}");
         assert_eq!(w.minutes.inputs.lock().unwrap()[0].language, minutes_language, "{setting}");
     }
+}
+
+/// Namer falso: guarda lo que recibe y responde con `reply` (o falla).
+struct FakeNamer {
+    reply: Result<Vec<(String, String)>, String>,
+    inputs: Mutex<Vec<SpeakerNamingInput>>,
+}
+#[async_trait]
+impl SpeakerNamer for FakeNamer {
+    async fn name_speakers(&self, input: SpeakerNamingInput) -> PortResult<Vec<SpeakerNameGuess>> {
+        self.inputs.lock().unwrap().push(input.clone());
+        let reply = self.reply.clone().map_err(PortError::Unavailable)?;
+        Ok(reply
+            .into_iter()
+            .filter_map(|(label, name)| {
+                let s = input.speakers.iter().find(|s| s.label == label)?;
+                Some(SpeakerNameGuess { speaker_id: s.id, name, evidence: "«Gracias, Marta»".into() })
+            })
+            .collect())
+    }
+}
+
+/// Caso real (19-nov-2026): en las 9 reuniones procesadas TODOS los
+/// hablantes quedaron «Speaker N» aunque se oía «Hola, soy María» o
+/// «gracias, Pepe»: sin huellas ni nombres de Teams no había otra fuente.
+#[tokio::test]
+async fn generic_speakers_get_the_name_said_in_the_conversation() {
+    let mut w = world().await;
+    let namer = Arc::new(FakeNamer { reply: Ok(vec![("Speaker 2".into(), "Marta".into())]), inputs: Mutex::new(vec![]) });
+    w.pipeline.speaker_namer = Some(namer.clone());
+    w.pipeline.run(w.id, &ProcessingStep::ORDER, &Sink(Mutex::new(vec![]))).await.unwrap();
+
+    let t = w.store.get_transcript(w.id).await.unwrap().unwrap();
+    let marta = t.speakers.iter().find(|s| s.label == "Speaker 2").unwrap();
+    assert_eq!((marta.display_name.as_deref(), marta.name_source, marta.confirmed), (Some("Marta"), NameSource::Transcript, false));
+    // Solo se pregunta por los que no tienen nombre (Luis ya viene de Teams).
+    let input = namer.inputs.lock().unwrap()[0].clone();
+    assert_eq!(input.targets, vec![marta.id]);
+    assert!(input.participants.contains(&"Luis".to_string()), "{:?}", input.participants);
+    assert!(input.self_names.contains(&"Edu Navajas".to_string()), "{:?}", input.self_names);
+    assert_eq!(input.title, "Reunión de Teams");
+    // El acta ya recibe el nombre.
+    let m = w.minutes.inputs.lock().unwrap()[0].clone();
+    assert!(m.speakers.iter().any(|s| s.shown_name() == "Marta"));
+}
+
+#[tokio::test]
+async fn a_failing_speaker_namer_keeps_generic_names_and_does_not_fail_the_meeting() {
+    let mut w = world().await;
+    w.pipeline.speaker_namer = Some(Arc::new(FakeNamer { reply: Err("claude caído".into()), inputs: Mutex::new(vec![]) }));
+    w.pipeline.run(w.id, &ProcessingStep::ORDER, &Sink(Mutex::new(vec![]))).await.unwrap();
+    let t = w.store.get_transcript(w.id).await.unwrap().unwrap();
+    assert!(t.speakers.iter().any(|s| s.label == "Speaker 2" && s.display_name.is_none()));
+}
+
+#[tokio::test]
+async fn a_guessed_name_never_duplicates_another_speaker_or_replaces_a_confirmed_one() {
+    let mut w = world().await;
+    // El LLM propone «Luis» (ya es Speaker 1 por Teams): se descarta.
+    let namer = Arc::new(FakeNamer { reply: Ok(vec![("Speaker 2".into(), "luis".into())]), inputs: Mutex::new(vec![]) });
+    w.pipeline.speaker_namer = Some(namer.clone());
+    let sink = Sink(Mutex::new(vec![]));
+    w.pipeline.run(w.id, &ProcessingStep::ORDER, &sink).await.unwrap();
+    let t = w.store.get_transcript(w.id).await.unwrap().unwrap();
+    let s2 = t.speakers.iter().find(|s| s.label == "Speaker 2").unwrap().clone();
+    assert_eq!((s2.display_name.as_deref(), s2.name_source), (None, NameSource::Generic));
+
+    // Confirmado por el usuario: reprocesar no lo vuelve a preguntar.
+    rename_speaker(&w.layout, w.store.as_ref(), w.store.as_ref(), w.id, s2.id, "Marta".into(), false, T0).await.unwrap();
+    namer.inputs.lock().unwrap().clear();
+    w.pipeline.run(w.id, &[ProcessingStep::NamingSpeakers], &sink).await.unwrap();
+    assert!(namer.inputs.lock().unwrap().is_empty(), "sin hablantes genéricos no se llama al LLM");
+    let t = w.store.get_transcript(w.id).await.unwrap().unwrap();
+    assert_eq!(t.speakers.iter().find(|s| s.id == s2.id).unwrap().display_name.as_deref(), Some("Marta"));
 }

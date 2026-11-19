@@ -63,6 +63,15 @@ describe("TranscriptTab", () => {
     expect(p.onRename).toHaveBeenCalledWith(d.transcript.speakers[1]!.id, "Ana", true);
   });
 
+  it("sugiere el nombre deducido de la conversación y al confirmarlo recuerda la voz", async () => {
+    const base = sampleMeeting().transcript;
+    const transcript = { ...base, speakers: base.speakers.map((s, i) => (i === 1 ? { ...s, displayName: "Marta", nameSource: "transcript" as const } : s)) };
+    const p = setup({ transcript });
+    expect(screen.getByText(/¿Es Marta\?/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Confirmar a Marta" }));
+    expect(p.onRename).toHaveBeenCalledWith(base.speakers[1]!.id, "Marta", true);
+  });
+
   it("no ofrece renombrar al propio usuario", () => {
     setup();
     expect(screen.queryByRole("button", { name: "Renombrar a Edu" })).not.toBeInTheDocument();
