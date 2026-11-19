@@ -71,6 +71,11 @@ pub enum Command {
     ScreenSnapshot(ScreenSnapshotArgs),
     #[serde(rename = "screen.stop")]
     ScreenStop,
+    /// Vigila el portapapeles: cada imagen nueva → `clipboard.image`.
+    #[serde(rename = "clipboard.start")]
+    ClipboardStart(ClipboardStartArgs),
+    #[serde(rename = "clipboard.stop")]
+    ClipboardStop,
     #[serde(rename = "asr.transcribe")]
     AsrTranscribe(AsrTranscribeArgs),
     #[serde(rename = "asr.live.start")]
@@ -265,6 +270,7 @@ pub struct SpeakersWatchArgs {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScreenStartArgs {
     pub session_id: String,
+    /// 0 = sin app: la pantalla principal (sin las ventanas de acta).
     pub pid: i32,
     pub bundle_id: String,
     pub window_title_hint: Option<String>,
@@ -288,6 +294,13 @@ pub enum CaptureReasonName {
     LlmPick,
     Manual,
     Candidate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipboardStartArgs {
+    /// `captures/` de la reunión (`<unix_ms>-manual.jpg`).
+    pub out_dir: String,
+    pub max_width: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -416,6 +429,9 @@ pub enum Event {
     ScreenShareState(ScreenShareStateEvent),
     #[serde(rename = "screen.frame")]
     ScreenFrame(ScreenFrameEvent),
+    /// Imagen copiada al portapapeles, ya guardada como JPEG (`reason: manual`).
+    #[serde(rename = "clipboard.image")]
+    ClipboardImage(ScreenFrameEvent),
     #[serde(rename = "asr.partial")]
     AsrPartial(AsrPartialEvent),
     #[serde(rename = "job.progress")]

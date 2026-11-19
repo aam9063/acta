@@ -5,7 +5,7 @@ use acta_core::api::{AudioInput, ModelDownload, ModelStatus};
 use acta_core::detection::{MeetingDetector, SpeakerNameSource};
 use acta_core::permissions::PermissionsProbe;
 use acta_core::recording::AudioSource;
-use acta_core::screen::ScreenCapturer;
+use acta_core::screen::{ClipboardImporter, ScreenCapturer};
 use acta_core::transcription::{Diarizer, LiveTranscriber, Transcriber};
 use acta_core::{EventStream, PortResult};
 use async_trait::async_trait;
@@ -56,6 +56,7 @@ pub struct NativePorts {
     pub detector: Arc<dyn MeetingDetector>,
     pub speakers: Arc<dyn SpeakerNameSource>,
     pub screen: Option<Arc<dyn ScreenCapturer>>,
+    pub clipboard: Option<Arc<dyn ClipboardImporter>>,
     pub live: Option<Arc<dyn LiveTranscriber>>,
     pub transcriber: Arc<dyn Transcriber>,
     pub diarizer: Arc<dyn Diarizer>,
@@ -81,6 +82,7 @@ impl NativePorts {
             detector: u.clone(),
             speakers: u.clone(),
             screen: None,
+            clipboard: None,
             live: None,
             transcriber: u.clone(),
             diarizer: u.clone(),
@@ -106,7 +108,7 @@ mod mac {
     use acta_mac_bridge::client::{SidecarClient, SidecarConfig, locate_sidecar};
     use acta_mac_bridge::detection::MacMeetingDetector;
     use acta_mac_bridge::permissions::MacPermissions;
-    use acta_mac_bridge::screen::MacScreenCapturer;
+    use acta_mac_bridge::screen::{MacClipboardImporter, MacScreenCapturer};
     use acta_mac_bridge::speakers::MacSpeakerNames;
     use acta_mac_bridge::transcription::{MacDiarizer, MacLiveTranscriber, MacModels, MacTranscriber};
 
@@ -215,6 +217,7 @@ mod mac {
             detector: Arc::new(MacMeetingDetector::new(client.clone())),
             speakers: Arc::new(MacSpeakerNames::new(client.clone())),
             screen: Some(Arc::new(MacScreenCapturer::new(client.clone()))),
+            clipboard: Some(Arc::new(MacClipboardImporter::new(client.clone()))),
             live: Some(Arc::new(MacLiveTranscriber::new(client.clone()))),
             transcriber: Arc::new(MacTranscriber::new(client.clone())),
             diarizer: Arc::new(MacDiarizer::new(client.clone())),

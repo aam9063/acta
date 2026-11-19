@@ -11,6 +11,7 @@
 //!   checkpoints dejaron de aparecer y nadie avisó).
 //! - `DiskLow`: menos de `min_free_bytes` en el volumen de datos.
 //! - `Overrun`, `SidecarRestarted`, `WriteFailed`: al ocurrir.
+//! - `PermissionMissing`: mientras falte (se limpia con `on_permission_granted`).
 //!
 //! Cada aviso se emite al empezar y se "limpia" (`cleared = true`) al
 //! resolverse. La UI lo muestra en la pastilla (punto rojo + texto).
@@ -85,9 +86,9 @@ struct TrackHealth {
 /// se prueba con relojes falsos. El `Watchdog` de acta-audio la envuelve y le
 /// añade la medición del disco.
 ///
-/// Un aviso persistente (parada, ceros, segmentos, disco) se emite una vez al
-/// aparecer y otra con `cleared = true` al resolverse. Los avisos puntuales
-/// (overrun, escritura fallida, reinicio del sidecar, permiso) se emiten una
+/// Un aviso persistente (parada, ceros, segmentos, disco, permiso) se emite
+/// una vez al aparecer y otra con `cleared = true` al resolverse. Los avisos
+/// puntuales (overrun, escritura fallida, reinicio del sidecar) se emiten una
 /// sola vez en el siguiente `tick`.
 #[derive(Debug, Clone)]
 pub struct HealthMonitor {
@@ -98,6 +99,9 @@ pub struct HealthMonitor {
     one_shot: Vec<HealthWarning>,
     paused: bool,
     sidecar_restarts: u32,
+    /// Permisos que faltan ahora mismo (aviso persistente, no de un disparo:
+    /// la pastilla lo quita cuando el reintento funciona).
+    missing: std::collections::BTreeMap<PermissionKind, String>,
 }
 
 impl HealthMonitor {
@@ -125,6 +129,7 @@ impl HealthMonitor {
             one_shot: Vec::new(),
             paused: false,
             sidecar_restarts: 0,
+            missing: std::collections::BTreeMap::new(),
         }
     }
 
@@ -197,17 +202,23 @@ impl HealthMonitor {
         }
     }
 
-    pub fn on_permission_missing(&mut self, permission: PermissionKind, at: UnixMs) {
+    /// Falta `permission`. El aviso dura hasta `on_permission_granted`.
+    pub fn on_permission_missing(&mut self, permission: PermissionKind, _at: UnixMs) {
         let message = match permission {
             PermissionKind::ScreenRecording => {
-                "Grabación de pantalla sin permiso: no habrá capturas (el audio se graba bien). Actívalo en Ajustes del Sistema › Privacidad › Grabación de pantalla."
+                "Grabación de pantalla sin permiso: no habrá capturas (el audio se graba bien). Actívalo en Ajustes del Sistema › Privacidad › Grabación de pantalla; si ya está activado, quita acta de la lista (−) y vuelve a añadirla (macOS guarda el permiso de la versión anterior). Se reintenta solo."
             }
             PermissionKind::Microphone => "Falta el permiso del Micrófono: tu voz no se está grabando. Actívalo en Ajustes del Sistema › Privacidad › Micrófono.",
             PermissionKind::SystemAudio => "Falta el permiso de Audio del sistema: no se graba a los demás. Actívalo en Ajustes del Sistema › Privacidad.",
             PermissionKind::Accessibility => "Accesibilidad sin permiso: no se sabrá quién habla en Teams (el audio se graba bien).",
             PermissionKind::Automation => "Automatización sin permiso: no se detectará Google Meet (el audio se graba bien).",
         };
-        self.push_one_shot(HealthIssue::PermissionMissing { permission }, at, message.into());
+        self.missing.insert(permission, message.into());
+    }
+
+    /// El permiso ya funciona (p. ej. el reintento de la captura arrancó).
+    pub fn on_permission_granted(&mut self, permission: PermissionKind) {
+        self.missing.remove(&permission);
     }
 
     pub fn on_paused(&mut self, _at: UnixMs) {
@@ -266,6 +277,9 @@ impl HealthMonitor {
                     ));
                 }
             }
+        }
+        for (&permission, message) in &self.missing {
+            wanted.push((HealthIssue::PermissionMissing { permission }, message.clone()));
         }
         if let Some(free) = free_disk_bytes
             && free < self.config.min_free_bytes

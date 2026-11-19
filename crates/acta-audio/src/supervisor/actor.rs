@@ -63,6 +63,10 @@ fn warning_key(issue: &HealthIssue) -> String {
     }
 }
 
+/// Cada cuánto se reintenta la captura de pantalla si no arrancó (permiso
+/// concedido a mitad de reunión, ventana que aún no existía...).
+pub(crate) const SCREEN_RETRY_MS: i64 = 10_000;
+
 fn forward<T: Send + 'static>(
     mut stream: EventStream<T>,
     tx: UnboundedSender<Msg>,
@@ -88,6 +92,10 @@ struct Recording {
     tasks: Vec<JoinHandle<()>>,
     speakers_on: bool,
     screen_on: bool,
+    /// Petición de captura de pantalla pendiente de arrancar (falló al
+    /// empezar) y cuándo reintentarla.
+    screen_retry: Option<(ScreenCaptureRequest, UnixMs)>,
+    clipboard_on: bool,
     live_on: bool,
     screen_sharing: bool,
     capture_count: u32,
@@ -310,6 +318,18 @@ impl Actor {
                     self.on_screen(event).await;
                 }
             }
+            Msg::Clipboard { gen_id, frame } => {
+                if !self.current_gen(gen_id) {
+                    return true;
+                }
+                if matches!(self.state, SessionState::Paused { .. }) {
+                    // En pausa el usuario puede estar con algo privado.
+                    let _ = std::fs::remove_file(&frame.path);
+                } else {
+                    tracing::info!("recorte del portapapeles importado como captura");
+                    self.save_frame(frame).await;
+                }
+            }
             Msg::Live { gen_id, partial } => {
                 if !self.current_gen(gen_id) {
                     return true;
@@ -393,6 +413,7 @@ impl Actor {
                 let _ = self.apply(SessionEvent::PromptExpired { prompt_id, at: now }).await;
             }
         }
+        self.retry_screen(now).await;
         let free = (self.ports.disk_free)(self.ports.layout.root());
         let Some(rec) = self.rec.as_mut() else { return };
         let auto = rec.autostop.on_tick(now);
@@ -684,6 +705,8 @@ impl Actor {
             tasks: Vec::new(),
             speakers_on: false,
             screen_on: false,
+            screen_retry: None,
+            clipboard_on: false,
             live_on: false,
             screen_sharing: false,
             capture_count: 0,
@@ -718,45 +741,42 @@ impl Actor {
             }
         }
 
-        if let Some(app) = app.as_ref() {
-            if app.platform == Platform::Teams {
-                match self.ports.speakers.watch(app).await {
-                    Ok(stream) => {
-                        rec.speakers_on = true;
-                        rec.tasks.push(forward(stream, self.tx.clone(), move |signal| Msg::Speaker { gen_id, signal }));
-                    }
-                    Err(e) => tracing::warn!("sin nombres de Teams (¿falta Accesibilidad?): {e}"),
+        if let Some(app) = app.as_ref()
+            && app.platform == Platform::Teams
+        {
+            match self.ports.speakers.watch(app).await {
+                Ok(stream) => {
+                    rec.speakers_on = true;
+                    rec.tasks.push(forward(stream, self.tx.clone(), move |signal| Msg::Speaker { gen_id, signal }));
                 }
+                Err(e) => tracing::warn!("sin nombres de Teams (¿falta Accesibilidad?): {e}"),
             }
-            if s.screen.enabled
-                && let Some(screen) = self.ports.screen.clone()
-            {
-                let layout = &self.ports.layout;
-                let req = ScreenCaptureRequest {
-                    meeting_id,
-                    app: app.clone(),
-                    out_dir: layout.captures_dir(meeting_id),
-                    candidates_dir: layout.capture_candidates_dir(meeting_id),
-                    fps: s.screen.fps,
-                    phash_threshold: s.screen.phash_threshold,
-                    stable_frames: s.screen.stable_frames,
-                    candidate_every_s: s.screen.candidate_every_s,
-                    ring_seconds: s.screen.ring_seconds,
-                    max_width: s.screen.max_width,
-                };
-                let _ = std::fs::create_dir_all(&req.candidates_dir);
-                match screen.start(req).await {
-                    Ok(stream) => {
-                        rec.screen_on = true;
-                        rec.tasks.push(forward(stream, self.tx.clone(), move |event| Msg::Screen { gen_id, event }));
-                    }
-                    Err(e) => {
-                        tracing::warn!("sin capturas de pantalla: {e}");
-                        if matches!(e, PortError::PermissionDenied(_)) {
-                            lock(&core).watchdog.on_permission_missing(PermissionKind::ScreenRecording, at);
-                        }
-                    }
+        }
+        // Sin app detectada (grabación manual) se captura la pantalla principal.
+        if s.screen.enabled && self.ports.screen.is_some() {
+            let layout = &self.ports.layout;
+            let req = ScreenCaptureRequest {
+                meeting_id,
+                app: app.clone(),
+                out_dir: layout.captures_dir(meeting_id),
+                candidates_dir: layout.capture_candidates_dir(meeting_id),
+                fps: s.screen.fps,
+                phash_threshold: s.screen.phash_threshold,
+                stable_frames: s.screen.stable_frames,
+                candidate_every_s: s.screen.candidate_every_s,
+                ring_seconds: s.screen.ring_seconds,
+                max_width: s.screen.max_width,
+            };
+            let _ = std::fs::create_dir_all(&req.candidates_dir);
+            self.start_screen(&mut rec, req, at).await;
+        }
+        if let Some(clip) = self.ports.clipboard.clone() {
+            match clip.start(self.ports.layout.captures_dir(meeting_id), s.screen.max_width).await {
+                Ok(stream) => {
+                    rec.clipboard_on = true;
+                    rec.tasks.push(forward(stream, self.tx.clone(), move |frame| Msg::Clipboard { gen_id, frame }));
                 }
+                Err(e) => tracing::warn!("sin importar recortes del portapapeles: {e}"),
             }
         }
         if let (Some(session), Some(asr)) = (live_session, self.ports.live_asr.clone()) {
@@ -790,6 +810,50 @@ impl Actor {
         }));
     }
 
+    /// Arranca la captura de pantalla. Si falla, avisa (si es el permiso) y
+    /// deja programado el reintento: TCC puede concederse a mitad de reunión
+    /// y la ventana puede no existir todavía.
+    async fn start_screen(&mut self, rec: &mut Recording, req: ScreenCaptureRequest, at: UnixMs) {
+        let Some(screen) = self.ports.screen.clone() else { return };
+        let gen_id = rec.gen_id;
+        match screen.start(req.clone()).await {
+            Ok(stream) => {
+                rec.screen_on = true;
+                rec.screen_retry = None;
+                rec.tasks.push(forward(stream, self.tx.clone(), move |event| Msg::Screen { gen_id, event }));
+                lock(&rec.core).watchdog.on_permission_granted(PermissionKind::ScreenRecording);
+            }
+            Err(e) => {
+                if rec.screen_retry.is_none() {
+                    tracing::warn!("sin capturas de pantalla (se reintenta cada {} s): {e}", SCREEN_RETRY_MS / 1000);
+                } else {
+                    tracing::debug!("reintento de la captura de pantalla: {e}");
+                }
+                if matches!(e, PortError::PermissionDenied(_)) {
+                    lock(&rec.core).watchdog.on_permission_missing(PermissionKind::ScreenRecording, at);
+                }
+                rec.screen_retry = Some((req, at.plus_ms(SCREEN_RETRY_MS)));
+            }
+        }
+    }
+
+    async fn retry_screen(&mut self, now: UnixMs) {
+        if matches!(self.state, SessionState::Paused { .. }) {
+            return;
+        }
+        let Some(mut rec) = self.rec.take() else { return };
+        if let Some((req, due)) = rec.screen_retry.clone()
+            && now >= due
+            && self.settings.screen.enabled
+        {
+            self.start_screen(&mut rec, req, now).await;
+            if rec.screen_on {
+                tracing::info!("la captura de pantalla ya funciona");
+            }
+        }
+        self.rec = Some(rec);
+    }
+
     async fn stop_capture(&mut self, meeting_id: MeetingId, reason: StopReason, at: UnixMs) {
         let Some(mut rec) = self.rec.take() else {
             self.pending.push_back(SessionEvent::CaptureFinalized { meeting_id });
@@ -814,6 +878,11 @@ impl Actor {
             && let Some(screen) = &self.ports.screen
         {
             let _ = screen.stop().await;
+        }
+        if rec.clipboard_on
+            && let Some(clip) = &self.ports.clipboard
+        {
+            let _ = clip.stop().await;
         }
         if rec.live_on
             && let Some(live) = &self.ports.live

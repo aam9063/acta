@@ -401,3 +401,56 @@ fn a_missing_permission_says_which_one_and_screen_recording_does_not_alarm_about
     let w = m.tick(T0.plus_ms(10), None);
     assert!(w[0].message.contains("Micrófono"), "{}", w[0].message);
 }
+
+/// Real (19-nov-2026): el aviso de pantalla era de un solo disparo y nunca se
+/// limpiaba; la pastilla lo enseñaba toda la reunión aunque el permiso
+/// funcionara después. Ahora dura mientras falte y se limpia al concederse.
+#[test]
+fn screen_permission_warning_stays_until_granted_and_then_clears() {
+    let mut m = monitor();
+    for t in [Track::Mic, Track::System] {
+        feed(&mut m, t, false, T0);
+    }
+    m.on_permission_missing(PermissionKind::ScreenRecording, T0);
+    let w = m.tick(T0.plus_ms(10), None);
+    assert_eq!(raised(&w), vec![&HealthIssue::PermissionMissing { permission: PermissionKind::ScreenRecording }]);
+    // Sigue activo: no se repite, pero tampoco se limpia.
+    for t in [Track::Mic, Track::System] {
+        feed(&mut m, t, false, T0.plus_ms(500));
+    }
+    assert!(m.tick(T0.plus_ms(600), None).is_empty());
+    // Volver a fallar no duplica el aviso.
+    m.on_permission_missing(PermissionKind::ScreenRecording, T0.plus_ms(700));
+    assert!(m.tick(T0.plus_ms(800), None).is_empty());
+    m.on_permission_granted(PermissionKind::ScreenRecording);
+    let w = m.tick(T0.plus_ms(900), None);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].cleared);
+    assert_eq!(w[0].issue, HealthIssue::PermissionMissing { permission: PermissionKind::ScreenRecording });
+    // Conceder algo que no faltaba no emite nada.
+    m.on_permission_granted(PermissionKind::Accessibility);
+    assert!(m.tick(T0.plus_ms(950), None).is_empty());
+}
+
+/// Si en Ajustes ya aparece activado (app sin firmar reinstalada: macOS
+/// guarda el permiso de la versión anterior), el aviso dice cómo arreglarlo.
+#[test]
+fn screen_permission_warning_explains_the_stale_grant_after_reinstalling() {
+    let mut m = monitor();
+    m.on_permission_missing(PermissionKind::ScreenRecording, T0);
+    let w = m.tick(T0.plus_ms(10), None);
+    let msg = &w.iter().find(|w| matches!(w.issue, HealthIssue::PermissionMissing { .. })).expect("aviso").message;
+    assert!(msg.contains("si ya está activado"), "{msg}");
+    assert!(msg.contains("quita acta"), "{msg}");
+    assert!(msg.contains("reintenta"), "{msg}");
+}
+
+#[test]
+fn a_permission_warning_survives_a_pause() {
+    let mut m = monitor();
+    m.on_permission_missing(PermissionKind::ScreenRecording, T0);
+    assert_eq!(raised(&m.tick(T0.plus_ms(10), None)).len(), 1);
+    m.on_paused(T0.plus_ms(20));
+    let w = m.tick(T0.plus_ms(30), None);
+    assert!(!w.iter().any(|w| w.cleared && matches!(w.issue, HealthIssue::PermissionMissing { .. })), "{w:?}");
+}

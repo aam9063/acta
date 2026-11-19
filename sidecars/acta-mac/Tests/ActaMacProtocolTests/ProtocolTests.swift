@@ -69,3 +69,17 @@ import Testing
     #expect(list[0]["running"] as? Bool == true)
     #expect(list[1]["icon_path"] == nil)
 }
+
+@Test func `decodes the clipboard commands and encodes the clipboard image event`() throws {
+    let s = try ProtocolCoding.decoder().decode(Request.self, from: Data(#"{"id":8,"cmd":"clipboard.start","args":{"out_dir":"/m/captures","max_width":1920}}"#.utf8))
+    #expect(s.command == .clipboardStart(ClipboardStartArgs(outDir: "/m/captures", maxWidth: 1920)))
+    let t = try ProtocolCoding.decoder().decode(Request.self, from: Data(#"{"id":9,"cmd":"clipboard.stop"}"#.utf8))
+    #expect(t.command == .clipboardStop)
+    let ev = ScreenFrameEvent(path: "/m/captures/1-manual.jpg", atUnixMs: 1, reason: .manual, phash: "00", width: 8, height: 6)
+    let data = try ProtocolCoding.encoder().encode(EventLine(ts: 1, event: .clipboardImage(ev)))
+    let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    #expect(json["event"] as? String == "clipboard.image")
+    let payload = try #require(json["data"] as? [String: Any])
+    #expect(payload["reason"] as? String == "manual")
+    #expect(payload["at_unix_ms"] as? Int == 1)
+}

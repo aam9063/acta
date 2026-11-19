@@ -214,6 +214,85 @@ async fn screen_frames_are_renamed_to_media_time_and_linked() {
     assert!(live.contains("shareStarted"));
 }
 
+/// Real (19-nov-2026): las grabaciones manuales (sin app detectada) no
+/// intentaban capturar nada. Ahora se captura la pantalla principal.
+#[tokio::test]
+async fn manual_recording_without_an_app_captures_the_main_display() {
+    let rig = Rig::new();
+    let mut settings = Settings::default();
+    settings.screen.enabled = true;
+    let h = start(&rig, settings).await;
+    let id = recording_id(&h.send(SessionEvent::StartRequested { app: None, at: T0 }).await.unwrap().state);
+    let req = rig.screen.requests.lock().unwrap()[0].clone();
+    assert_eq!(req.app, None);
+    assert_eq!(req.out_dir, rig.layout.captures_dir(id));
+}
+
+/// Real (19-nov-2026): sin permiso al empezar, la pastilla lo decía toda la
+/// reunión y no se volvía a intentar; al arreglar el permiso seguía sin
+/// capturar. Ahora se reintenta y el aviso se quita al funcionar.
+#[tokio::test]
+async fn denied_screen_capture_is_retried_and_the_warning_clears_when_it_works() {
+    let rig = Rig::new();
+    *rig.screen.deny.lock().unwrap() = 2;
+    let mut settings = Settings::default();
+    settings.screen.enabled = true;
+    let h = start(&rig, settings).await;
+    let mut rx = h.subscribe();
+    let id = detect_and_accept(&rig, &h, &mut rx).await;
+    let is_screen = |w: &HealthWarning| w.issue == HealthIssue::PermissionMissing { permission: acta_core::permissions::PermissionKind::ScreenRecording };
+    wait_for(&mut rx, |e| matches!(e, SupervisorEvent::Health(w) if is_screen(w) && !w.cleared)).await;
+    assert_eq!(*rig.screen.attempts.lock().unwrap(), 1);
+    // Antes del plazo no se reintenta.
+    rig.clock.advance_ms(2_000);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(*rig.screen.attempts.lock().unwrap(), 1);
+    // Segundo intento: sigue sin permiso (el aviso no se repite ni se limpia).
+    rig.clock.advance_ms(9_000);
+    eventually(|| *rig.screen.attempts.lock().unwrap() == 2).await;
+    // Tercero: funciona.
+    rig.clock.advance_ms(11_000);
+    wait_for(&mut rx, |e| matches!(e, SupervisorEvent::Health(w) if is_screen(w) && w.cleared)).await;
+    assert_eq!(*rig.screen.attempts.lock().unwrap(), 3);
+    assert!(h.health().await.unwrap().iter().all(|w| !is_screen(w)), "ya no sale en la pastilla");
+    // Y las capturas llegan.
+    let frame = rig.screen.write_frame(id, T0.plus_ms(23_000), CaptureReason::SlideChange);
+    rig.screen.push(ScreenEvent::FrameSaved { frame });
+    wait_for(&mut rx, |e| matches!(e, SupervisorEvent::CaptureSaved(_))).await;
+    // Ya no hay más reintentos.
+    rig.clock.advance_ms(60_000);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(*rig.screen.attempts.lock().unwrap(), 3);
+}
+
+/// Recortes del usuario con su herramienta (al portapapeles) → capturas de
+/// la reunión, como las automáticas. En pausa no se importa nada.
+#[tokio::test]
+async fn clipboard_snips_become_captures_of_the_meeting_except_while_paused() {
+    let rig = Rig::new();
+    let h = start(&rig, Settings::default()).await;
+    let mut rx = h.subscribe();
+    let id = recording_id(&h.send(SessionEvent::StartRequested { app: None, at: T0 }).await.unwrap().state);
+    assert_eq!(rig.clipboard.out_dirs.lock().unwrap()[0], rig.layout.captures_dir(id));
+    let f = rig.clipboard.copy(T0.plus_ms(2_000));
+    let ev = wait_for(&mut rx, |e| matches!(e, SupervisorEvent::CaptureSaved(_))).await;
+    let SupervisorEvent::CaptureSaved(c) = ev else { unreachable!() };
+    assert_eq!(c.reason, CaptureReason::Manual);
+    assert_eq!(c.path, "captures/000002000-manual.jpg");
+    assert!(rig.layout.meeting_dir(id).join(&c.path).exists());
+    assert!(!f.path.exists());
+    assert_eq!(h.snapshot().await.unwrap().capture_count, 1);
+
+    h.send(SessionEvent::PauseRequested { at: T0.plus_ms(3_000) }).await.unwrap();
+    let paused = rig.clipboard.copy(T0.plus_ms(3_500));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(rig.store.captures.lock().unwrap().len(), 1, "en pausa no se importa");
+    assert!(!paused.path.exists(), "y no se deja el fichero suelto");
+
+    h.send(SessionEvent::StopRequested { reason: StopReason::User, at: T0.plus_ms(4_000) }).await.unwrap();
+    eventually(|| !rig.clipboard.running()).await;
+}
+
 #[tokio::test]
 async fn keyword_in_live_preview_takes_a_snapshot() {
     let rig = Rig::new();

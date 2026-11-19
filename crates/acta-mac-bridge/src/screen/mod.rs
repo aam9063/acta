@@ -5,13 +5,16 @@
 //! - `screen.frame` → `FrameSaved` (slide_change y candidate).
 //! - `snapshot` devuelve el frame en la respuesta; el sidecar NO lo repite
 //!   como evento `screen.frame` (así no se guarda dos veces).
+//! - `MacClipboardImporter`: `clipboard.image` → `CapturedFrame` (manual).
 
 use crate::client::{SidecarClient, SidecarMessage};
 use crate::protocol::{
-    CaptureReasonName, Command, Event, ScreenFrameEvent, ScreenSnapshotArgs, ScreenSnapshotResult, ScreenStartArgs,
+    CaptureReasonName, ClipboardStartArgs, Command, Event, ScreenFrameEvent, ScreenSnapshotArgs, ScreenSnapshotResult,
+    ScreenStartArgs,
 };
 use crate::task::{Slot, spawn_stream};
-use acta_core::screen::{CaptureReason, CapturedFrame, ScreenCaptureRequest, ScreenCapturer, ScreenEvent};
+use acta_core::screen::{CaptureReason, CapturedFrame, ClipboardImporter, ScreenCaptureRequest, ScreenCapturer, ScreenEvent};
+use std::path::PathBuf;
 use acta_core::time::UnixMs;
 use acta_core::{EventStream, PortResult};
 use async_trait::async_trait;
@@ -66,9 +69,9 @@ pub(crate) fn frame_from_wire(f: ScreenFrameEvent) -> CapturedFrame {
 fn start_args(r: &ScreenCaptureRequest) -> ScreenStartArgs {
     ScreenStartArgs {
         session_id: r.meeting_id.to_string(),
-        pid: r.app.pid,
-        bundle_id: r.app.bundle_id.clone(),
-        window_title_hint: r.app.title.clone(),
+        pid: r.app.as_ref().map_or(0, |a| a.pid),
+        bundle_id: r.app.as_ref().map(|a| a.bundle_id.clone()).unwrap_or_default(),
+        window_title_hint: r.app.as_ref().and_then(|a| a.title.clone()),
         out_dir: r.out_dir.display().to_string(),
         candidates_dir: r.candidates_dir.display().to_string(),
         fps: r.fps,
@@ -147,5 +150,62 @@ impl ScreenCapturer for MacScreenCapturer {
     async fn stop(&self) -> PortResult<()> {
         self.task.cancel();
         self.client.call(Command::ScreenStop, None).await.map(|_| ())
+    }
+}
+
+/// `ClipboardImporter` sobre el sidecar (NSPasteboard en Swift).
+pub struct MacClipboardImporter {
+    client: SidecarClient,
+    task: Slot,
+}
+
+impl MacClipboardImporter {
+    pub fn new(client: SidecarClient) -> Self {
+        Self {
+            client,
+            task: Slot::default(),
+        }
+    }
+}
+
+#[async_trait]
+impl ClipboardImporter for MacClipboardImporter {
+    async fn start(&self, out_dir: PathBuf, max_width: u32) -> PortResult<EventStream<CapturedFrame>> {
+        self.task.cancel();
+        let args = ClipboardStartArgs {
+            out_dir: out_dir.display().to_string(),
+            max_width,
+        };
+        let mut rx = self.client.subscribe();
+        self.client.call(Command::ClipboardStart(args.clone()), None).await?;
+        let client = self.client.clone();
+        let (stream, handle) = spawn_stream(move |tx| async move {
+            loop {
+                let frame = match rx.recv().await {
+                    Ok(SidecarMessage::Event(env)) => match env.event {
+                        Event::ClipboardImage(f) => frame_from_wire(f),
+                        _ => continue,
+                    },
+                    Ok(SidecarMessage::Restarted { .. }) => {
+                        if let Err(e) = client.call(Command::ClipboardStart(args.clone()), None).await {
+                            tracing::warn!("clipboard.start after restart failed: {e}");
+                        }
+                        continue;
+                    }
+                    Ok(SidecarMessage::GaveUp { .. }) | Err(RecvError::Closed) => return,
+                    Err(RecvError::Lagged(_)) => continue,
+                };
+                if tx.send(frame).await.is_err() {
+                    return;
+                }
+            }
+        });
+        self.task.set(handle);
+        Ok(stream)
+    }
+
+    async fn stop(&self) -> PortResult<()> {
+        self.task.cancel();
+        self.client.call(Command::ClipboardStop, None).await.map(|_| ())
     }
 }

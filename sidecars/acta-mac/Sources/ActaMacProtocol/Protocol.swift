@@ -195,6 +195,17 @@ public struct ScreenStartArgs: Codable, Sendable, Equatable {
     }
 }
 
+/// `clipboard.start`: cada imagen nueva del portapapeles → `clipboard.image`.
+public struct ClipboardStartArgs: Codable, Sendable, Equatable {
+    public var outDir: String
+    public var maxWidth: UInt32
+
+    public init(outDir: String, maxWidth: UInt32) {
+        self.outDir = outDir
+        self.maxWidth = maxWidth
+    }
+}
+
 public struct ScreenSnapshotArgs: Codable, Sendable, Equatable {
     public var reason: CaptureReasonName
     public var atUnixMs: Int64
@@ -306,6 +317,8 @@ public enum Command: Sendable, Equatable {
     case screenStart(ScreenStartArgs)
     case screenSnapshot(ScreenSnapshotArgs)
     case screenStop
+    case clipboardStart(ClipboardStartArgs)
+    case clipboardStop
     case asrTranscribe(AsrTranscribeArgs)
     case asrLiveStart(AsrLiveStartArgs)
     case asrLiveStop
@@ -456,6 +469,8 @@ public struct Request: Decodable, Sendable, Equatable {
         case "screen.start": command = .screenStart(try args(ScreenStartArgs.self))
         case "screen.snapshot": command = .screenSnapshot(try args(ScreenSnapshotArgs.self))
         case "screen.stop": command = .screenStop
+        case "clipboard.start": command = .clipboardStart(try args(ClipboardStartArgs.self))
+        case "clipboard.stop": command = .clipboardStop
         case "asr.transcribe": command = .asrTranscribe(try args(AsrTranscribeArgs.self))
         case "asr.live.start": command = .asrLiveStart(try args(AsrLiveStartArgs.self))
         case "asr.live.stop": command = .asrLiveStop
@@ -884,6 +899,8 @@ public enum Event: Sendable, Equatable {
     case speakersActive(SpeakersActiveEvent)
     case screenShareState(ScreenShareStateEvent)
     case screenFrame(ScreenFrameEvent)
+    /// Imagen del portapapeles ya guardada como JPEG (`reason: manual`).
+    case clipboardImage(ScreenFrameEvent)
     case asrPartial(AsrPartialEvent)
     case jobProgress(JobProgressEvent)
     case modelsProgress(ModelsProgressEvent)
@@ -902,6 +919,7 @@ public enum Event: Sendable, Equatable {
         case .speakersActive: "speakers.active"
         case .screenShareState: "screen.share_state"
         case .screenFrame: "screen.frame"
+        case .clipboardImage: "clipboard.image"
         case .asrPartial: "asr.partial"
         case .jobProgress: "job.progress"
         case .modelsProgress: "models.progress"
@@ -939,6 +957,7 @@ public struct EventLine: Encodable, Sendable {
         case .speakersActive(let d): try c.encode(d, forKey: .data)
         case .screenShareState(let d): try c.encode(d, forKey: .data)
         case .screenFrame(let d): try c.encode(d, forKey: .data)
+        case .clipboardImage(let d): try c.encode(d, forKey: .data)
         case .asrPartial(let d): try c.encode(d, forKey: .data)
         case .jobProgress(let d): try c.encode(d, forKey: .data)
         case .modelsProgress(let d): try c.encode(d, forKey: .data)

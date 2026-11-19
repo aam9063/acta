@@ -66,6 +66,10 @@ impl Watchdog {
         self.monitor.on_permission_missing(permission, at);
     }
 
+    pub fn on_permission_granted(&mut self, permission: PermissionKind) {
+        self.monitor.on_permission_granted(permission);
+    }
+
     pub fn on_paused(&mut self, at: UnixMs) {
         self.monitor.on_paused(at);
     }

@@ -1,6 +1,7 @@
 import ActaMacProtocol
 import CoreGraphics
 import Foundation
+import ImageIO
 import Testing
 @testable import ActaMacCore
 
@@ -115,4 +116,67 @@ private func win(_ id: UInt32, _ title: String, _ w: Double, _ h: Double, scale:
     #expect(w == 1920 && h == 1200)
     let (w1, h1) = WindowTracking.outputSize(WindowGeometry(id: 1, width: 1000, height: 600, scale: 1), maxWidth: 1920)
     #expect(w1 == 1000 && h1 == 600)
+}
+
+// MARK: - Contenido estático (19-nov-2026: sin ninguna captura)
+
+/// ScreenCaptureKit solo entrega frames `.complete` cuando cambia algo: con una
+/// diapositiva quieta llega UNO y el detector, que pedía dos iguales, no
+/// guardaba nunca. Un "sigue igual" cuenta como otro frame igual.
+@Test func `a static slide is saved even if only one complete frame arrives`() {
+    var d = SlideChangeDetector(threshold: 10, stableFrames: 2)
+    do { let r = d.observeUnchanged(); #expect(!r, "nada que repetir todavía") }
+    let slide: UInt64 = 0x0F0F_0F0F_0F0F_0F0F
+    do { let r = d.observe(slide); #expect(!r) }
+    do { let r = d.observeUnchanged(); #expect(r, "quieta un intervalo → guardada") }
+    do { let r = d.observeUnchanged(); #expect(!r, "y solo una vez") }
+}
+
+@Test func `an unchanged frame is repeated once per frame interval without new frames`() {
+    #expect(!StaticFrames.shouldRepeat(lastObservedMs: nil, nowMs: 10_000, fps: 1))
+    #expect(!StaticFrames.shouldRepeat(lastObservedMs: 9_500, nowMs: 10_000, fps: 1), "aún dentro del intervalo")
+    #expect(!StaticFrames.shouldRepeat(lastObservedMs: 8_900, nowMs: 10_000, fps: 1), "un frame que llega algo tarde no es «sin cambios»")
+    #expect(StaticFrames.shouldRepeat(lastObservedMs: 8_400, nowMs: 10_000, fps: 1), "1,5 intervalos sin frames")
+    #expect(StaticFrames.shouldRepeat(lastObservedMs: 9_200, nowMs: 10_000, fps: 2), "a 2 fps el intervalo es 500 ms")
+}
+
+// MARK: - Sin app: la pantalla principal
+
+@Test func `without a meeting app the main display is captured`() {
+    #expect(ScreenTarget(pid: 0) == .display)
+    #expect(ScreenTarget(pid: -1) == .display)
+    #expect(ScreenTarget(pid: 4242) == .window(pid: 4242))
+}
+
+@Test func `acta itself is excluded from display captures`() {
+    #expect(ScreenTarget.excludedPids(selfPid: 10, parentPid: 9) == [10, 9])
+    #expect(ScreenTarget.excludedPids(selfPid: 10, parentPid: 1) == [10], "launchd no es acta")
+}
+
+// MARK: - Recortes del portapapeles
+
+@Test func `only new non-private images on the clipboard are imported`() {
+    #expect(ClipboardPolicy.imageType(in: ["public.png", "public.tiff"]) == "public.png")
+    #expect(ClipboardPolicy.imageType(in: ["public.tiff"]) == "public.tiff")
+    #expect(ClipboardPolicy.imageType(in: ["public.jpeg"]) == "public.jpeg")
+    #expect(ClipboardPolicy.imageType(in: ["public.utf8-plain-text"]) == nil, "texto no")
+    #expect(ClipboardPolicy.imageType(in: ["public.png", "org.nspasteboard.ConcealedType"]) == nil, "contraseñas y similares")
+    #expect(ClipboardPolicy.imageType(in: ["public.png", "org.nspasteboard.TransientType"]) == nil)
+    // Copiar un fichero en Finder trae su icono como TIFF: eso no es un recorte.
+    #expect(ClipboardPolicy.imageType(in: ["public.file-url", "public.tiff"]) == nil)
+    #expect(ClipboardPolicy.isNew(changeCount: 5, last: 4))
+    #expect(!ClipboardPolicy.isNew(changeCount: 4, last: 4))
+}
+
+@Test func `a clipboard image is encoded as jpeg under max width`() throws {
+    let png = NSMutableData()
+    let dest = try #require(CGImageDestinationCreateWithData(png as CFMutableData, "public.png" as CFString, 1, nil))
+    CGImageDestinationAddImage(dest, gradient(width: 400, height: 300), nil)
+    #expect(CGImageDestinationFinalize(dest))
+    let img = try #require(ClipboardImage.decode(png as Data, maxWidth: 200))
+    #expect(img.width == 200 && img.height == 150)
+    #expect(img.jpeg.starts(with: [0xFF, 0xD8]), "JPEG")
+    let full = try #require(ClipboardImage.decode(png as Data, maxWidth: 1920))
+    #expect(full.width == 400 && full.height == 300, "nunca se agranda")
+    #expect(ClipboardImage.decode(Data([1, 2, 3]), maxWidth: 100) == nil)
 }

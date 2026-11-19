@@ -65,6 +65,20 @@ pub fn merge_app_level(mut states: Vec<acta_core::permissions::PermissionState>,
     states
 }
 
+/// Permisos que la captura real acaba de rechazar (avisos activos de la
+/// grabación en curso): se muestran denegados aunque la consulta diga otra
+/// cosa (la consulta de TCC puede estar en caché o ver un permiso viejo).
+pub fn apply_runtime_denials(mut states: Vec<acta_core::permissions::PermissionState>, denied: &[PermissionKind]) -> Vec<acta_core::permissions::PermissionState> {
+    use acta_core::permissions::{PermissionState, PermissionStatus};
+    for &kind in denied {
+        match states.iter_mut().find(|s| s.kind == kind) {
+            Some(s) => s.status = PermissionStatus::Denied,
+            None => states.push(PermissionState { kind, status: PermissionStatus::Denied, target: None }),
+        }
+    }
+    states
+}
+
 /// Bytes que ocupa una carpeta (recursivo, sin seguir enlaces). 0 si no existe.
 pub fn dir_size_sync(path: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(path) else { return 0 };
@@ -186,5 +200,19 @@ mod permission_tests {
         // Sin sidecar (no arrancó), la app los sigue enseñando.
         let out = merge_app_level(vec![], AppLevel { accessibility: true, screen_recording: false });
         assert_eq!(out, vec![st(PermissionKind::Accessibility, PermissionStatus::Granted), st(PermissionKind::ScreenRecording, PermissionStatus::NotDetermined)]);
+    }
+
+    /// Real (19-nov-2026): Ajustes del Sistema enseñaba acta activada en
+    /// Grabación de pantalla, pero el permiso era de una versión anterior
+    /// (cdhash distinto, app sin firmar reinstalada) y ScreenCaptureKit lo
+    /// rechazaba. Lo que pasó de verdad al capturar manda sobre la consulta.
+    #[test]
+    fn a_permission_refused_while_capturing_wins_over_the_preflight() {
+        let states = vec![st(PermissionKind::Microphone, PermissionStatus::Granted), st(PermissionKind::ScreenRecording, PermissionStatus::Granted)];
+        let out = apply_runtime_denials(states.clone(), &[PermissionKind::ScreenRecording]);
+        assert_eq!(out, vec![st(PermissionKind::Microphone, PermissionStatus::Granted), st(PermissionKind::ScreenRecording, PermissionStatus::Denied)]);
+        assert_eq!(apply_runtime_denials(states.clone(), &[]), states);
+        let out = apply_runtime_denials(vec![], &[PermissionKind::ScreenRecording]);
+        assert_eq!(out, vec![st(PermissionKind::ScreenRecording, PermissionStatus::Denied)]);
     }
 }

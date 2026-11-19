@@ -8,6 +8,10 @@
 //   ¿Comparte alguien? AX ("X está presentando") y, si AX no dice nada,
 //   el propio detector de diapositivas (source "frame").
 //   screen.snapshot devuelve el frame más cercano del anillo (sin evento).
+//   Sin app (pid 0, grabación manual): la pantalla principal sin acta.
+//   SCK solo entrega frames cuando cambia algo: si no llega ninguno en 1,5
+//   intervalos, el último cuenta como "sigue igual" (si no, una diapositiva
+//   quieta no se guardaba nunca).
 
 import ActaMacProtocol
 import CoreGraphics
@@ -82,10 +86,50 @@ struct SlideChangeDetector {
         return true
     }
 
+    /// No llegó frame nuevo en un intervalo: el contenido sigue igual que el
+    /// último (ScreenCaptureKit no repite frames sin cambios).
+    mutating func observeUnchanged() -> Bool {
+        guard let p = previous else { return false }
+        return observe(p)
+    }
+
     mutating func reset() {
         lastSaved = nil
         previous = nil
         stableRun = 0
+    }
+}
+
+enum StaticFrames {
+    /// ¿Han pasado 1,5 intervalos sin frames? (margen para no confundir un
+    /// frame que llega tarde con contenido quieto).
+    static func shouldRepeat(lastObservedMs: Int64?, nowMs: Int64, fps: Double) -> Bool {
+        guard let last = lastObservedMs else { return false }
+        let interval = 1000 / max(0.1, fps)
+        return Double(nowMs - last) >= interval * 1.5
+    }
+}
+
+/// Qué se captura.
+enum ScreenTarget: Equatable, Sendable {
+    /// Ventana de la app de la reunión.
+    case window(pid: Int32)
+    /// Sin app detectada: la pantalla principal, sin las ventanas de acta.
+    case display
+
+    init(pid: Int32) { self = pid > 0 ? .window(pid: pid) : .display }
+
+    /// acta-mac y la app que lo lanzó (acta.app); launchd (1) no.
+    static func excludedPids(selfPid: Int32, parentPid: Int32) -> [Int32] {
+        parentPid > 1 ? [selfPid, parentPid] : [selfPid]
+    }
+}
+
+enum ScreenErrors {
+    /// TCC denegado (SCStreamError.userDeclined, -3801).
+    static func isPermission(_ error: Error) -> Bool {
+        let e = error as NSError
+        return e.domain == SCStreamErrorDomain && e.code == SCStreamError.Code.userDeclined.rawValue
     }
 }
 
@@ -245,7 +289,22 @@ final class WindowStreamer: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
     func start(window: SCWindow, maxWidth: Int, fps: Double) async throws {
         // `desktopIndependentWindow`: la ventana se captura esté en la pantalla que esté.
         let filter = SCContentFilter(desktopIndependentWindow: window)
-        let g = Self.geometry(of: window, filter: filter)
+        try await start(filter: filter, geometry: Self.geometry(of: window, filter: filter), maxWidth: maxWidth, fps: fps)
+    }
+
+    /// Pantalla principal sin las ventanas de acta (grabación sin app).
+    func startDisplay(_ content: SCShareableContent, maxWidth: Int, fps: Double) async throws {
+        guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? content.displays.first else {
+            throw ProtocolError(code: .notFound, message: "no display to capture")
+        }
+        let excluded = ScreenTarget.excludedPids(selfPid: getpid(), parentPid: getppid())
+        let apps = content.applications.filter { excluded.contains($0.processID) }
+        let filter = SCContentFilter(display: display, excludingApplications: apps, exceptingWindows: [])
+        let g = WindowGeometry(id: display.displayID, width: Double(display.width), height: Double(display.height), scale: Double(filter.pointPixelScale))
+        try await start(filter: filter, geometry: g, maxWidth: maxWidth, fps: fps)
+    }
+
+    private func start(filter: SCContentFilter, geometry g: WindowGeometry, maxWidth: Int, fps: Double) async throws {
         let s = SCStream(filter: filter, configuration: Self.configuration(g, maxWidth: maxWidth, fps: fps), delegate: self)
         try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         try await s.startCapture()
@@ -314,6 +373,9 @@ public actor ScreenService {
     private var lastCandidateMs: Int64 = 0
     private var axTask: Task<Void, Never>?
     private var restartTask: Task<Void, Never>?
+    private var staticTask: Task<Void, Never>?
+    /// Último frame real o repetido que vio el detector.
+    private var lastObservedMs: Int64?
 
     public init(output: Output) { self.output = output }
 
@@ -334,21 +396,21 @@ public actor ScreenService {
         sharing = false
         axSharing = nil
         axEverSaw = false
-        try await openStream()
-        startAxPolling(pid: a.pid)
+        lastObservedMs = nil
+        do {
+            try await openStream()
+        } catch {
+            // Rust reintenta con otro screen.start; no quedar «activo» a medias.
+            args = nil
+            throw error
+        }
+        startStaticTicker()
+        if case .window(let pid) = ScreenTarget(pid: a.pid) { startAxPolling(pid: pid) }
     }
 
     private func openStream() async throws {
         guard let a = args else { return }
-        let found: SCWindow?
-        do {
-            found = try await WindowStreamer.findWindow(pid: a.pid, titleHint: a.windowTitleHint)
-        } catch {
-            throw ProtocolError(code: .permissionDenied, message: "screen recording permission not granted: \(error.localizedDescription)")
-        }
-        guard let window = found else {
-            throw ProtocolError(code: .notFound, message: "no capturable window for pid \(a.pid)")
-        }
+        let target = ScreenTarget(pid: a.pid)
         let s = WindowStreamer(
             onFrame: { [weak self] box in
                 let at = Clock.unixMs()
@@ -358,9 +420,37 @@ public actor ScreenService {
                 Task { await self?.streamStopped(err) }
             }
         )
-        try await s.start(window: window, maxWidth: Int(a.maxWidth), fps: Double(a.fps))
+        do {
+            switch target {
+            case .window(let pid):
+                let found: SCWindow?
+                do {
+                    found = try await WindowStreamer.findWindow(pid: pid, titleHint: a.windowTitleHint)
+                } catch {
+                    throw ProtocolError(code: .permissionDenied, message: "screen recording permission not granted: \(error.localizedDescription)")
+                }
+                guard let window = found else {
+                    throw ProtocolError(code: .notFound, message: "no capturable window for pid \(pid)")
+                }
+                try await s.start(window: window, maxWidth: Int(a.maxWidth), fps: Double(a.fps))
+            case .display:
+                let content: SCShareableContent
+                do {
+                    content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                } catch {
+                    throw ProtocolError(code: .permissionDenied, message: "screen recording permission not granted: \(error.localizedDescription)")
+                }
+                try await s.startDisplay(content, maxWidth: Int(a.maxWidth), fps: Double(a.fps))
+            }
+        } catch let e as ProtocolError {
+            throw e
+        } catch where ScreenErrors.isPermission(error) {
+            throw ProtocolError(code: .permissionDenied, message: "screen recording permission not granted: \(error.localizedDescription)")
+        } catch {
+            throw ProtocolError(code: .internalError, message: "screen capture failed to start: \(error.localizedDescription)")
+        }
         streamer = s
-        startFollowing()
+        if case .window = target { startFollowing() }
     }
 
     /// Cada 3 s: ¿sigue siendo la ventana buena, en la misma pantalla y tamaño?
@@ -430,15 +520,48 @@ public actor ScreenService {
         await output.emit(.screenShareState(ScreenShareStateEvent(sharing: now, presenter: now ? presenter : nil, source: "ax")))
     }
 
+    /// Cada segundo: si SCK no ha mandado nada en 1,5 intervalos, el último
+    /// frame sigue en pantalla.
+    private func startStaticTicker() {
+        staticTask?.cancel()
+        staticTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                await self?.repeatIfStatic()
+            }
+        }
+    }
+
+    private func repeatIfStatic() async {
+        guard let a = args, streamer != nil, var f = ring.latest else { return }
+        let now = Clock.unixMs()
+        guard StaticFrames.shouldRepeat(lastObservedMs: lastObservedMs, nowMs: now, fps: Double(a.fps)) else { return }
+        lastObservedMs = now
+        // Se reanilla con la hora actual: el snapshot (botón, palabra clave)
+        // encuentra la diapositiva quieta aunque lleve minutos sin cambiar.
+        f.atUnixMs = now
+        ring.append(f)
+        await evaluate(f, changed: false, lowJpeg: nil)
+    }
+
     private func handle(_ box: ImageBox, at: Int64) async {
-        guard let a = args else { return }
+        guard args != nil else { return }
         guard let jpeg = Jpeg.encode(box.image, quality: 0.8), let h = DHash.hash(box.image) else { return }
         let frame = RingFrame(atUnixMs: at, jpeg: jpeg, phash: h, width: box.image.width, height: box.image.height)
         ring.append(frame)
+        lastObservedMs = at
+        await evaluate(frame, changed: true, lowJpeg: Jpeg.encode(box.image, quality: 0.6))
+    }
+
+    /// `changed = false`: el frame es el último repetido (contenido quieto).
+    private func evaluate(_ frame: RingFrame, changed: Bool, lowJpeg: Data?) async {
+        guard let a = args else { return }
+        let at = frame.atUnixMs
         // Con AX diciendo "no comparte" no buscamos diapositivas.
         guard axSharing != false else { return }
-        if detector.observe(h) {
-            if !sharing, axSharing == nil {
+        if changed ? detector.observe(frame.phash) : detector.observeUnchanged() {
+            // En modo pantalla (sin app) no hay "alguien comparte": solo capturas.
+            if !sharing, axSharing == nil, ScreenTarget(pid: a.pid) != .display {
                 sharing = true
                 await output.emit(.screenShareState(ScreenShareStateEvent(sharing: true, presenter: nil, source: "frame")))
             }
@@ -447,7 +570,7 @@ public actor ScreenService {
         if sharing, at - lastCandidateMs >= Int64(a.candidateEveryS) * 1000 {
             lastCandidateMs = at
             var c = frame
-            if let lower = Jpeg.encode(box.image, quality: 0.6) { c.jpeg = lower }
+            if let lowJpeg { c.jpeg = lowJpeg }
             await save(c, reason: .candidate, dir: a.candidatesDir, keyword: nil, emit: true)
         }
     }
@@ -479,6 +602,9 @@ public actor ScreenService {
         restartTask = nil
         followTask?.cancel()
         followTask = nil
+        staticTask?.cancel()
+        staticTask = nil
+        lastObservedMs = nil
         await streamer?.stop()
         streamer = nil
         ring = FrameRing(seconds: 20)

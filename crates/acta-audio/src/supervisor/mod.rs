@@ -26,7 +26,7 @@ use acta_core::library::MeetingStore;
 use acta_core::minutes::ImportantMomentDetector;
 use acta_core::processing::{ProcessingPipeline, ProcessingProgress, ProcessingStep};
 use acta_core::recording::{AudioSource, HealthWarning, Levels, SessionEvent};
-use acta_core::screen::{Capture, ScreenCapturer, ScreenEvent};
+use acta_core::screen::{Capture, CapturedFrame, ClipboardImporter, ScreenCapturer, ScreenEvent};
 use acta_core::settings::Settings;
 use acta_core::time::Clock;
 use acta_core::transcription::{LiveTranscriber, LivePartial, Transcriber};
@@ -74,6 +74,8 @@ pub struct SupervisorPorts {
     pub detector: Arc<dyn MeetingDetector>,
     pub speakers: Arc<dyn SpeakerNameSource>,
     pub screen: Option<Arc<dyn ScreenCapturer>>,
+    /// Recortes que el usuario copia al portapapeles durante la grabación.
+    pub clipboard: Option<Arc<dyn ClipboardImporter>>,
     pub live: Option<Arc<dyn LiveTranscriber>>,
     /// ASR para la transcripción en vivo por ventanas (`crate::live`). Si
     /// está, sustituye a `live` (no se transcribe dos veces).
@@ -121,6 +123,7 @@ pub(crate) enum Msg {
     Detection(DetectionEvent),
     Speaker { gen_id: u64, signal: SpeakerSignal },
     Screen { gen_id: u64, event: ScreenEvent },
+    Clipboard { gen_id: u64, frame: CapturedFrame },
     Live { gen_id: u64, partial: LivePartial },
     LiveTranscript { gen_id: u64, transcript: acta_core::api::LiveTranscript },
     Processing(SessionEvent),

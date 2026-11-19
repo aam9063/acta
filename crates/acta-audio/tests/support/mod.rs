@@ -165,6 +165,10 @@ impl SpeakerNameSource for FakeSpeakers {
 pub struct FakeScreen {
     pub tx: Mutex<Option<mpsc::UnboundedSender<ScreenEvent>>>,
     pub requests: Mutex<Vec<ScreenCaptureRequest>>,
+    /// Cuántos `start` más fallan con «sin permiso» (TCC denegado).
+    pub deny: Mutex<u32>,
+    /// Intentos de `start`, también los fallidos.
+    pub attempts: Mutex<u32>,
     pub snapshots: Mutex<Vec<(CaptureReason, UnixMs, Option<String>)>>,
     pub layout: DataLayout,
 }
@@ -173,6 +177,8 @@ impl FakeScreen {
         Self {
             tx: Mutex::new(None),
             requests: Mutex::new(vec![]),
+            deny: Mutex::new(0),
+            attempts: Mutex::new(0),
             snapshots: Mutex::new(vec![]),
             layout,
         }
@@ -195,6 +201,14 @@ impl FakeScreen {
 #[async_trait]
 impl ScreenCapturer for FakeScreen {
     async fn start(&self, request: ScreenCaptureRequest) -> PortResult<EventStream<ScreenEvent>> {
+        *lock(&self.attempts) += 1;
+        {
+            let mut deny = lock(&self.deny);
+            if *deny > 0 {
+                *deny -= 1;
+                return Err(PortError::PermissionDenied("screen recording permission not granted".into()));
+            }
+        }
         lock(&self.requests).push(request);
         let (tx, rx) = mpsc::unbounded_channel();
         *lock(&self.tx) = Some(tx);
@@ -206,6 +220,40 @@ impl ScreenCapturer for FakeScreen {
         let mut f = self.write_frame(meeting, at, reason);
         f.keyword = keyword;
         Ok(Some(f))
+    }
+    async fn stop(&self) -> PortResult<()> {
+        lock(&self.tx).take();
+        Ok(())
+    }
+}
+
+/// Portapapeles falso: `copy` hace lo que el sidecar al ver una imagen nueva.
+#[derive(Default)]
+pub struct FakeClipboard {
+    pub tx: Mutex<Option<mpsc::UnboundedSender<CapturedFrame>>>,
+    pub out_dirs: Mutex<Vec<std::path::PathBuf>>,
+}
+impl FakeClipboard {
+    pub fn copy(&self, at: UnixMs) -> CapturedFrame {
+        let dir = lock(&self.out_dirs).last().cloned().expect("clipboard started");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{}-manual.jpg", at.0));
+        std::fs::write(&path, b"jpg").unwrap();
+        let f = CapturedFrame { path, at, reason: CaptureReason::Manual, phash: "0f0f0f0f0f0f0f0f".into(), width: 800, height: 600, keyword: None };
+        lock(&self.tx).as_ref().expect("clipboard started").send(f.clone()).unwrap();
+        f
+    }
+    pub fn running(&self) -> bool {
+        lock(&self.tx).is_some()
+    }
+}
+#[async_trait]
+impl ClipboardImporter for FakeClipboard {
+    async fn start(&self, out_dir: std::path::PathBuf, _max_width: u32) -> PortResult<EventStream<CapturedFrame>> {
+        lock(&self.out_dirs).push(out_dir);
+        let (tx, rx) = mpsc::unbounded_channel();
+        *lock(&self.tx) = Some(tx);
+        Ok(receiver_stream(rx))
     }
     async fn stop(&self) -> PortResult<()> {
         lock(&self.tx).take();
@@ -381,6 +429,7 @@ pub struct Rig {
     pub detector: Arc<FakeDetector>,
     pub speakers: Arc<FakeSpeakers>,
     pub screen: Arc<FakeScreen>,
+    pub clipboard: Arc<FakeClipboard>,
     pub live: Arc<FakeLive>,
     pub store: Arc<FakeStore>,
     pub pipeline: Arc<FakePipeline>,
@@ -401,6 +450,7 @@ impl Rig {
             audio: Arc::default(),
             detector: Arc::default(),
             speakers: Arc::default(),
+            clipboard: Arc::default(),
             live: Arc::default(),
             store: Arc::default(),
             pipeline: Arc::new(pipeline),
@@ -414,6 +464,7 @@ impl Rig {
             detector: self.detector.clone(),
             speakers: self.speakers.clone(),
             screen: Some(self.screen.clone()),
+            clipboard: Some(self.clipboard.clone()),
             live: Some(self.live.clone()),
             live_asr: None,
             live_sessions: Arc::default(),

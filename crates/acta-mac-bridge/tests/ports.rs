@@ -8,12 +8,12 @@ use acta_core::detection::{MeetingApp, Platform, SpeakerNameSource, SpeakerSigna
 use acta_core::ids::MeetingId;
 use acta_core::permissions::{PermissionKind, PermissionStatus, PermissionsProbe};
 use acta_core::recording::Track;
-use acta_core::screen::{CaptureReason, ScreenCaptureRequest, ScreenCapturer, ScreenEvent};
+use acta_core::screen::{CaptureReason, ClipboardImporter, ScreenCaptureRequest, ScreenCapturer, ScreenEvent};
 use acta_core::time::UnixMs;
 use acta_core::transcription::{DiarizeOptions, Diarizer, LiveTranscriber, TranscribeRequest, Transcriber};
 use acta_core::{EventStream, PortError};
 use acta_mac_bridge::permissions::MacPermissions;
-use acta_mac_bridge::screen::MacScreenCapturer;
+use acta_mac_bridge::screen::{MacClipboardImporter, MacScreenCapturer};
 use acta_mac_bridge::speakers::MacSpeakerNames;
 use acta_mac_bridge::transcription::{MacDiarizer, MacLiveTranscriber, MacModels, MacTranscriber, MacVoiceprints};
 use futures::StreamExt;
@@ -108,7 +108,7 @@ async fn screen_start_maps_share_state_and_frames_and_snapshot() {
     let cap = MacScreenCapturer::new(client.clone());
     let request = ScreenCaptureRequest {
         meeting_id: MeetingId::from_u128(9),
-        app: teams(),
+        app: Some(teams()),
         out_dir: "/m/captures".into(),
         candidates_dir: "/m/captures/candidates".into(),
         fps: 1.0,
@@ -160,6 +160,64 @@ async fn screen_start_maps_share_state_and_frames_and_snapshot() {
         serde_json::json!({"reason": "keyword", "at_unix_ms": 1_700_000_002_000_i64, "keyword": "deadline"})
     );
     cap.stop().await.unwrap();
+    client.shutdown().await.unwrap();
+}
+
+/// Grabación manual sin app detectada: se pide la pantalla principal
+/// (`pid` 0) en vez de no capturar nada (19-nov-2026: 4 de 9 reuniones sin
+/// ninguna captura porque no había app).
+#[tokio::test]
+async fn screen_start_without_an_app_asks_for_the_main_display() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = format!("    screen.start) {};;\n    screen.stop) {};;", ok("{}"), ok("{}"));
+    let client = start(dir.path(), &cases).await;
+    let cap = MacScreenCapturer::new(client.clone());
+    let request = ScreenCaptureRequest {
+        meeting_id: MeetingId::from_u128(9),
+        app: None,
+        out_dir: "/m/captures".into(),
+        candidates_dir: "/m/captures/candidates".into(),
+        fps: 1.0,
+        phash_threshold: 10,
+        stable_frames: 2,
+        candidate_every_s: 30,
+        ring_seconds: 20,
+        max_width: 1920,
+    };
+    let _s = cap.start(request).await.unwrap();
+    let reqs = requests(dir.path());
+    let start_req = reqs.iter().find(|r| r["cmd"] == "screen.start").unwrap();
+    assert_eq!(start_req["args"]["pid"], 0);
+    assert_eq!(start_req["args"]["bundle_id"], "");
+    assert!(start_req["args"]["window_title_hint"].is_null());
+    cap.stop().await.unwrap();
+    client.shutdown().await.unwrap();
+}
+
+/// Recortes del usuario (Cmd+Ctrl+Mayús+4) → capturas `manual`.
+#[tokio::test]
+async fn clipboard_images_become_manual_frames() {
+    let dir = tempfile::tempdir().unwrap();
+    let img = r#"{"path":"/m/captures/1700000003000-manual.jpg","at_unix_ms":1700000003000,"reason":"manual","phash":"0f0f0f0f0f0f0f0f","width":800,"height":600,"keyword":null}"#;
+    let cases = format!(
+        "    clipboard.start) {}; {}; {};;\n    clipboard.stop) {};;",
+        ok("{}"),
+        event("screen.frame", FRAME),
+        event("clipboard.image", img),
+        ok("{}")
+    );
+    let client = start(dir.path(), &cases).await;
+    let clip = MacClipboardImporter::new(client.clone());
+    let mut s = clip.start("/m/captures".into(), 1920).await.unwrap();
+    let f = next(&mut s).await;
+    assert_eq!(f.reason, CaptureReason::Manual, "los screen.frame no son del portapapeles");
+    assert_eq!(f.at, UnixMs(1_700_000_003_000));
+    assert_eq!((f.width, f.height), (800, 600));
+    let reqs = requests(dir.path());
+    let req = reqs.iter().find(|r| r["cmd"] == "clipboard.start").unwrap();
+    assert_eq!(req["args"], serde_json::json!({"out_dir": "/m/captures", "max_width": 1920}));
+    clip.stop().await.unwrap();
+    assert!(reqs.iter().all(|r| r["cmd"] != "screen.start"));
     client.shutdown().await.unwrap();
 }
 

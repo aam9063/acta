@@ -10,6 +10,7 @@ public actor Dispatcher {
     private let detection: DetectionService
     private let speakers: SpeakersService
     private let screen: ScreenService
+    private let clipboard: ClipboardService
     private let transcription: TranscriptionService
     private let permissionsMonitor: PermissionsMonitor
     private let exit: @Sendable (Int32) -> Void
@@ -21,13 +22,14 @@ public actor Dispatcher {
         detection = DetectionService(output: output)
         speakers = SpeakersService(output: output)
         screen = ScreenService(output: output)
+        clipboard = ClipboardService(output: output)
         transcription = TranscriptionService(output: output, modelsBase: modelsBase)
         permissionsMonitor = PermissionsMonitor(output: output)
         self.exit = exit ?? { code in Foundation.exit(code) }
     }
 
     static var capabilities: [String] {
-        var caps = ["mic", "detection", "ax_teams", "screen_capture", "asr", "diarization", "voiceprint", "live_asr", "permissions"]
+        var caps = ["mic", "detection", "ax_teams", "screen_capture", "clipboard_import", "asr", "diarization", "voiceprint", "live_asr", "permissions"]
         if #available(macOS 14.2, *) { caps.insert("process_tap", at: 0) }
         return caps
     }
@@ -140,6 +142,12 @@ public actor Dispatcher {
         case .screenStop:
             await screen.stop()
             await ok(id, Empty())
+        case .clipboardStart(let a):
+            try await clipboard.start(a)
+            await ok(id, Empty())
+        case .clipboardStop:
+            await clipboard.stop()
+            await ok(id, Empty())
 
         case .asrTranscribe(let a):
             await ok(id, try await transcription.transcribe(a))
@@ -181,6 +189,7 @@ public actor Dispatcher {
         await detection.stop()
         await speakers.unwatch()
         await screen.stop()
+        await clipboard.stop()
         await capture.setLiveSink(nil)
         await transcription.liveStop()
         await transcription.cancelAll()

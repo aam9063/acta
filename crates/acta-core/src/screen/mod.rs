@@ -80,7 +80,9 @@ pub enum ScreenEvent {
 #[serde(rename_all = "camelCase")]
 pub struct ScreenCaptureRequest {
     pub meeting_id: MeetingId,
-    pub app: MeetingApp,
+    /// Ventana de la app de la reunión. `None` (grabación manual sin app
+    /// detectada) = la pantalla principal, sin las ventanas de acta.
+    pub app: Option<MeetingApp>,
     /// `captures/` de la reunión.
     pub out_dir: PathBuf,
     /// `captures/candidates/` de la reunión.
@@ -110,5 +112,16 @@ pub trait ScreenCapturer: Send + Sync {
         at: UnixMs,
         keyword: Option<String>,
     ) -> PortResult<Option<CapturedFrame>>;
+    async fn stop(&self) -> PortResult<()>;
+}
+
+/// Imágenes que el usuario copia al portapapeles durante la grabación (su
+/// propia herramienta de recortes, p. ej. Cmd+Ctrl+Mayús+4). Cada imagen
+/// nueva se guarda como JPEG en `out_dir` y se anuncia como `Manual`.
+/// No necesita el permiso de Grabación de pantalla.
+#[async_trait]
+pub trait ClipboardImporter: Send + Sync {
+    /// Empieza a vigilar. Lo que ya estaba en el portapapeles NO se importa.
+    async fn start(&self, out_dir: PathBuf, max_width: u32) -> PortResult<EventStream<CapturedFrame>>;
     async fn stop(&self) -> PortResult<()>;
 }
