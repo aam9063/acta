@@ -69,13 +69,15 @@ foreach ($tool in @('cargo', 'rustc', 'rg', 'pnpm')) {
 
 # `bash` en Windows puede ser WSL (C:\Windows\System32\bash.exe), que ve otro
 # sistema de ficheros y no sirve para scripts/guards.sh. Solo aceptamos Git Bash.
+# Se reconoce por `uname -s` y no por `$MSYSTEM`: esa variable solo existe cuando
+# ya venimos de una sesión Git Bash, así que en CI llegaria vacia.
 $bash = Get-Command bash -ErrorAction SilentlyContinue
 $gitBash = $false
 if ($null -ne $bash) {
-    $msystem = & bash -c 'printf %s "$MSYSTEM"' 2>$null
-    if ($LASTEXITCODE -eq 0 -and $msystem -match '^(MINGW|MSYS|UCRT)') {
+    $uname = & bash -c 'uname -s' 2>$null
+    if ($LASTEXITCODE -eq 0 -and $uname -match '^(MINGW|MSYS|CYGWIN)') {
         $gitBash = $true
-        Write-Host ("OK: git bash ({0}) -> {1}" -f $msystem, $bash.Source) -ForegroundColor Green
+        Write-Host ("OK: git bash ({0}) -> {1}" -f $uname, $bash.Source) -ForegroundColor Green
     }
     else {
         Write-Host ("AVISO: 'bash' es WSL u otro shell, no Git Bash ({0})" -f $bash.Source) -ForegroundColor Yellow
