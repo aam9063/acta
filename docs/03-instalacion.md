@@ -2,6 +2,8 @@
 
 acta se compila e instala **localmente**, sin firmar. Todo lo hace `scripts/install-mac.sh`.
 
+Esta página es de macOS. Para ejecutar la app en Windows (desarrollo del fork, sin instalador todavía), ver [`03-instalacion-windows.md`](./03-instalacion-windows.md).
+
 ## 1. Requisitos
 
 | Qué | Versión |

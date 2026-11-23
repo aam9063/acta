@@ -79,8 +79,8 @@ Convenciones de la columna «Cómo llegar»: la app no usa router; las vistas so
 - **Selectores/ids para control programático**: `role="dialog"` + `aria-label="Búsqueda rápida"` (`app/CommandPalette.tsx:156`), `aria-label="Buscar en acta"` en el input (`:162`), `role="listbox"` + `aria-label="Resultados"` (`:178`). Único `data-testid` de `src/`: `data-testid="scroller"` (`chat/Chat.test.tsx:193`).
 - **Ubicación del código**: `crates/acta-llm/` (proveedores, prompts, acta, chat), `crates/acta-store/` (búsqueda, hilos, secretos), `apps/desktop/src/features/{minutes,chat,providers}/`, `app/CommandPalette.tsx`.
 - **Puertos/backend implicados**: `LlmProvider` (`llm/ports.rs:8`), `LlmProviderFactory` (`:17`), `Retriever` (`chat/mod.rs:106`). Comandos `chat_send`, `chat_cancel`, `chat_thread_*`, `chat_messages_list`, `search`, `llm_*`, `secret_set`, `secret_delete`. Eventos `chat:delta`, `live:answer`.
-- **Estado en Windows**: **portable, a verificar en M1**. Ningún proveedor LLM viene activado de fábrica.
-- **Trampas conocidas**: las claves de proveedor se guardan en el llavero del sistema (`crates/acta-store/src/secrets/mod.rs:47-80`, sin `cfg` de plataforma), así que en Windows dependen de la feature `windows-native` de `keyring` (bloqueo 2 del baseline). Sin llavero, `secret_set` falla con `Unavailable` y el chat no funciona aunque el proveedor esté configurado.
+- **Estado en Windows**: **portable: compila y arranca en M1**. Ningún proveedor LLM viene activado de fábrica.
+- **Trampas conocidas**: las claves de proveedor se guardan en el llavero del sistema (`crates/acta-store/src/secrets/mod.rs:47-80`, sin `cfg` de plataforma); desde M1 `keyring` resuelve con la feature `windows-native`, lo que activa el backend de Windows por construcción. **Sin verificar**: no se ha hecho un ciclo real de guardar/leer/borrar un secreto contra el Credential Manager, así que "la clave se guarda" es hoy una expectativa razonada, no una observación. **Hueco pendiente**: la detección de CLIs sigue asumiendo macOS — intenta lanzar `/bin/zsh` y en Windows registra `spawn failed: El sistema no puede encontrar la ruta especificada. (os error 3)`. Degrada con aviso y no impide usar proveedores por API, pero la autodetección de CLI no funciona todavía. `kill_stale` (`crates/acta-llm/src/local/server.rs`) también depende de `/bin/ps` y `/bin/kill`: en Windows devuelve `false` en silencio y no reapa huérfanos.
 
 ## BIBLIOTECA Y GRUPOS
 
@@ -91,8 +91,8 @@ Convenciones de la columna «Cómo llegar»: la app no usa router; las vistas so
 - **Selectores/ids para control programático**: por texto y rol; p. ej. `getByRole("button", { name: "Crear grupo" })` (`groups/Groups.test.tsx:24`). Las filas no tienen `data-testid` ni `aria-label`: **es una carencia, no un olvido documentado**.
 - **Ubicación del código**: `crates/acta-store/`, `apps/desktop/src/features/{meetings,groups,cleanup}/`.
 - **Puertos/backend implicados**: `MeetingStore` (`library/ports.rs:17`), `GroupStore` (`:68`), `LlmProvider` para títulos sugeridos (`groups_suggest_title`). Comandos `meetings_list`, `meeting_get`, `meeting_update`, `meeting_delete`, `meeting_set_favourite`, `meeting_retry`, `meeting_export_transcript`, `meeting_export_audio`, `open_meeting_folder`, `groups_*`, `group_*`, `cleanup_*`. Evento `meeting:updated`.
-- **Estado en Windows**: **portable, a verificar en M1** (SQLite con rusqlite bundled, FTS5 y sqlite-vec).
-- **Trampas conocidas**: `open_meeting_folder` abre el explorador de Windows con la ruta de datos de `ACTA_DATA_DIR` o `%APPDATA%`; si apuntaste a un directorio temporal para probar, la carpeta que abre es la temporal.
+- **Estado en Windows**: **SQLite y layout verificados en M1** (rusqlite bundled, FTS5 y sqlite-vec). Ojo con la lectura: en M1 se comprobó que la base de datos se crea y que el layout se resuelve, **no** que la UI de biblioteca y grupos funcione al pulsarla.
+- **Trampas conocidas**: `open_meeting_folder` abre el explorador de Windows con la ruta de datos de `ACTA_DATA_DIR` o `%APPDATA%`; si apuntaste a un directorio temporal para probar, la carpeta que abre es la temporal. Verificado en M1: al arrancar se crean `acta.db`, `acta.db-shm`, `acta.db-wal` (WAL) y las carpetas `meetings/`, `models/` y `logs/` bajo la raíz de datos.
 
 ## PASTILLA FLOTANTE (OVERLAY)
 
@@ -103,7 +103,7 @@ Convenciones de la columna «Cómo llegar»: la app no usa router; las vistas so
 - **Selectores/ids para control programático**: `aria-label` en los botones de pausar y parar (`OverlayPill.tsx:135,141`), `role="meter"` (`:37`), `role="group"` (`:76`); tests por texto (`overlay/Overlay.test.tsx:180-182`).
 - **Ubicación del código**: `apps/desktop/src-tauri/src/overlay.rs`, `apps/desktop/src/features/overlay/`, `apps/desktop/overlay.html`.
 - **Puertos/backend implicados**: ninguno propio; espeja el estado de sesión. Comandos `overlay_set_expanded` (`src-tauri/src/commands.rs:124-138`) y `main_window_show`; evento `main:navigate`.
-- **Estado en Windows**: **parcial (M1)**. La rama no macOS ya existe: `set_overlay` en `apps/desktop/src-tauri/src/lib.rs:97-103` muestra y oculta una ventana normal en lugar de un NSPanel (`overlay.rs:77-99` es la conversión a NSPanel, solo macOS). Falta comprobar que la ventana queda siempre encima y no roba el foco.
+- **Estado en Windows**: **parcial (M1, verificado)**. La rama no macOS ya existe: `set_overlay` en `apps/desktop/src-tauri/src/lib.rs:97-103` muestra y oculta una ventana normal en lugar de un NSPanel (`overlay.rs:77-99` es la conversión a NSPanel, solo macOS). En M1 se comprobó que arranca la ventana principal con título `acta`; queda comprobar en M1+ que la pastilla queda siempre encima y no roba el foco (`tauri.windows.conf.json` declara `alwaysOnTop`, `focus: false`, `skipTaskbar`).
 - **Trampas conocidas**: si la pastilla no aparece en macOS suele ser el NSPanel; en Windows será la regla de visibilidad (`overlay.rs:72-74`) o el flag de siempre encima, no la conversión a panel.
 
 ## PERMISOS
