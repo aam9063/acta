@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! La configuración de Windows debe fusionarse sin claves de macOS y con el
 //! scope del asset protocol apuntando a la raíz de datos real.
 //!
